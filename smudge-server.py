@@ -1,8 +1,9 @@
 """
 Smudge API — spatial ATProto comment index.
 
-  GET  /api/comments?page={slug}  — returns all indexed comments for a page
-  POST /api/index                 — indexes a new comment
+  GET    /api/comments?page={slug}  — returns all indexed comments for a page
+  POST   /api/index                 — indexes a new comment
+  DELETE /api/index                 — removes a comment from the index
 
 Page is identified by a simple slug (e.g. "movieingOut", "housewarming").
 
@@ -14,10 +15,11 @@ import re
 import json
 import urllib.request
 import urllib.parse
-from flask import request, jsonify
+from flask import Flask, request, jsonify
 
-from app_init import app, DATA_DIR
+app = Flask(__name__)
 
+DATA_DIR = os.environ.get('SMUDGE_DATA_DIR', os.path.join(os.path.dirname(__file__), 'data'))
 COMMENTS_DIR = os.path.join(DATA_DIR, 'comments')
 ISSO_URL = os.environ.get('ISSO_URL', '')
 
@@ -51,9 +53,12 @@ def _fetch_isso_comments(page_slug):
         return []
     # Isso uses path-style URIs
     uri = f'/{page_slug}'
-    api_url = f'{ISSO_URL}/api/?uri={urllib.parse.quote(uri)}'
+    api_url = f'{ISSO_URL}/?uri={urllib.parse.quote(uri)}'
     try:
-        req = urllib.request.Request(api_url, headers={'Accept': 'application/json'})
+        req = urllib.request.Request(api_url, headers={
+            'Accept': 'application/json',
+            'User-Agent': 'smudge-server/1.0',
+        })
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
     except Exception as e:
@@ -64,13 +69,14 @@ def _fetch_isso_comments(page_slug):
     for reply in data.get('replies', []):
         pos_x, pos_y = 0, 0
         website = reply.get('website', '') or ''
-        m = re.match(r'pos:(\d+),(\d+)', website)
+        m = re.match(r'pos:(\d+),(\d+)', website) or \
+            re.match(r'https?://smudge\.pos/(\d+)/(\d+)', website)
         if m:
             pos_x, pos_y = int(m.group(1)), int(m.group(2))
         results.append({
             'source': 'isso',
             'id': reply.get('id'),
-            'text': reply.get('text', ''),
+            'text': re.sub(r'<[^>]+>', '', reply.get('text', '')).strip(),
             'positionX': pos_x,
             'positionY': pos_y,
             'createdAt': reply.get('created', 0),
@@ -94,9 +100,22 @@ def get_comments():
     return jsonify(atproto + isso)
 
 
-@app.route('/api/index', methods=['POST'])
+
+@app.route('/api/index', methods=['POST', 'DELETE'])
 def index_comment():
     data = request.get_json(force=True, silent=True) or {}
+
+    if request.method == 'DELETE':
+        for field in ['did', 'rkey', 'page']:
+            if field not in data:
+                return jsonify({'error': f'missing field: {field}'}), 400
+        slug = _safe_slug(data['page'])
+        comments = _load_comments(slug)
+        key = (data['did'], data['rkey'])
+        before = len(comments)
+        comments = [c for c in comments if (c.get('did'), c.get('rkey')) != key]
+        _save_comments(slug, comments)
+        return jsonify({'ok': True, 'removed': before - len(comments)})
 
     required = ['did', 'rkey', 'page', 'text', 'positionX', 'positionY', 'createdAt']
     missing = [k for k in required if k not in data]
@@ -124,3 +143,12 @@ def index_comment():
 
     _save_comments(slug, comments)
     return jsonify({'ok': True})
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Smudge API server')
+    parser.add_argument('--port', type=int, default=5000)
+    parser.add_argument('--host', default='127.0.0.1')
+    args = parser.parse_args()
+    app.run(host=args.host, port=args.port, debug=True)

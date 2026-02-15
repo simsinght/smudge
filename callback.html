@@ -12,7 +12,7 @@
   <script type="module">
     let OAuthClient;
     try {
-      const mod = await import('https://esm.sh/@atproto/oauth-client-browser@0.3.20');
+      const mod = await import('./oauth-client-browser.js');
       OAuthClient = mod.BrowserOAuthClient;
     } catch {
       // Fallback: the callback just needs to signal completion
@@ -20,11 +20,12 @@
 
     if (OAuthClient) {
       try {
+        const clientMetadata = await fetch('./client-metadata.json').then(r => r.json());
         const client = new OAuthClient({
-          clientMetadata: await fetch('/smudge/client-metadata.json').then(r => r.json()),
+          clientMetadata,
           handleResolver: 'https://bsky.social',
         });
-        const result = await client.callback(new URLSearchParams(location.search));
+        const result = await client.init();
       } catch (e) {
         console.error('OAuth callback error:', e);
       }

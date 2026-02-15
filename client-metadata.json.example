@@ -1,11 +1,11 @@
 {
-  "client_id": "https://sims.computer/smudge/client-metadata.json",
+  "client_id": "https://yoursite.com/smudge/client-metadata.json",
   "application_type": "web",
-  "client_name": "sims.computer comments",
-  "client_uri": "https://sims.computer",
+  "client_name": "My Site Comments",
+  "client_uri": "https://yoursite.com",
   "dpop_bound_access_tokens": true,
   "grant_types": ["authorization_code", "refresh_token"],
-  "redirect_uris": ["https://sims.computer/smudge/callback.html"],
+  "redirect_uris": ["https://yoursite.com/smudge/callback.html"],
   "response_types": ["code"],
   "scope": "atproto transition:generic",
   "token_endpoint_auth_method": "none"
