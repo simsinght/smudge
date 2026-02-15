@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>signing in...</title>
+  <style>
+    body { background: #1a1a1a; color: #888; font-family: monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+  </style>
+</head>
+<body>
+  <p>completing sign-in...</p>
+  <script type="module">
+    let OAuthClient;
+    try {
+      const mod = await import('https://esm.sh/@atproto/oauth-client-browser@0.3.20');
+      OAuthClient = mod.BrowserOAuthClient;
+    } catch {
+      // Fallback: the callback just needs to signal completion
+    }
+
+    if (OAuthClient) {
+      try {
+        const client = new OAuthClient({
+          clientMetadata: await fetch('/smudge/client-metadata.json').then(r => r.json()),
+          handleResolver: 'https://bsky.social',
+        });
+        const result = await client.callback(new URLSearchParams(location.search));
+      } catch (e) {
+        console.error('OAuth callback error:', e);
+      }
+    }
+
+    // Redirect back to the originating page
+    const returnTo = sessionStorage.getItem('smudge_return_to') || '/';
+    window.location.href = returnTo;
+  </script>
+</body>
+</html>

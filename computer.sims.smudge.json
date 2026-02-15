@@ -1,0 +1,22 @@
+{
+  "lexicon": 1,
+  "id": "computer.sims.smudge",
+  "description": "A spatial comment placed at a specific position on a web page.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["text", "pageUrl", "createdAt"],
+        "properties": {
+          "text": { "type": "string", "maxGraphemes": 3000 },
+          "pageUrl": { "type": "string", "format": "uri" },
+          "positionX": { "type": "integer" },
+          "positionY": { "type": "integer" },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}
