@@ -33,6 +33,8 @@ let AgentClass = null;     // stored from dynamic import
 let layerVisible = false;
 let comments = [];
 const profileCache = {};
+// Detect touch-primary devices (phones/tablets) via pointer capability, not screen size
+const isMobile = window.matchMedia('(pointer: coarse)').matches;
 
 // ── styles ─────────────────────────────────────────────────────────────
 function injectStyles() {
@@ -76,6 +78,10 @@ function injectStyles() {
     .smudge-layer.active {
       pointer-events: auto;
       background: rgba(0,0,0,0.001); /* needed for hit-testing on transparent layers */
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: manipulation;
     }
 
     /* ── fixed UI overlay — immune to page zoom ── */
@@ -96,8 +102,16 @@ function injectStyles() {
     .smudge {
       position: absolute;
       cursor: pointer;
+      pointer-events: none;
+      opacity: 0;
+      transition: filter 0.4s ease, transform 0.5s ease, opacity 0.4s ease;
+    }
+    .smudge-layer.active .smudge {
       pointer-events: auto;
-      transition: filter 0.4s ease, transform 0.5s ease;
+      opacity: 1;
+    }
+    .smudge-layer.active .smudge.isso-smudge {
+      opacity: 0.7;
     }
     .smudge:hover {
       filter: brightness(1.3);
@@ -120,13 +134,12 @@ function injectStyles() {
       opacity: 0.85;
     }
     .smudge.isso-smudge {
-      opacity: 0.4;
-      filter: saturate(0.4) brightness(0.7);
+      filter: saturate(0.7) brightness(0.85);
     }
 
     /* ── tooltip ── */
     .smudge-tooltip {
-      position: fixed;
+      position: absolute;
       z-index: 10001;
       background: rgba(20, 18, 16, 0.92);
       backdrop-filter: blur(16px);
@@ -259,7 +272,7 @@ function injectStyles() {
 
     /* ── compose popup ── */
     .smudge-compose {
-      position: fixed;
+      position: absolute;
       z-index: 10002;
       background: rgba(20, 18, 16, 0.95);
       backdrop-filter: blur(20px);
@@ -370,7 +383,7 @@ function injectStyles() {
 
     /* ── long-press progress ── */
     .smudge-press-indicator {
-      position: fixed;
+      position: absolute;
       pointer-events: none;
       z-index: 9650;
       width: clamp(48px, 3.5vw, 120px);
@@ -434,15 +447,255 @@ function injectStyles() {
       display: none;
     }
     .smudge-status.visible { display: block; }
+    @media (pointer: coarse) {
+      .smudge-status {
+        right: auto;
+        bottom: auto;
+        font-size: 13px;
+        padding: 8px 12px;
+        border-radius: 20px;
+        max-width: none;
+        color: #aaa;
+        background: rgba(30,28,24,0.9);
+        border: 1px solid rgba(255,255,255,0.1);
+        text-align: right;
+        white-space: nowrap;
+      }
+    }
+
+    /* ── cluster badge ── */
+    .smudge-cluster {
+      position: absolute;
+      cursor: pointer;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.4s ease, transform 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .smudge-layer.active .smudge-cluster {
+      pointer-events: auto;
+      opacity: 1;
+    }
+    .smudge-cluster:hover { transform: scale(1.15); }
+    .smudge-cluster-count {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: rgba(180, 130, 60, 0.9);
+      color: #fff;
+      font-family: monospace;
+      font-size: clamp(9px, 0.7vw, 16px);
+      font-weight: bold;
+      width: clamp(16px, 1.2vw, 28px);
+      height: clamp(16px, 1.2vw, 28px);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+      z-index: 1;
+    }
+
+    /* ── list panel ── */
+    .smudge-list-btn {
+      position: fixed;
+      bottom: clamp(16px, 1.8vw, 32px);
+      right: clamp(76px, 6vw, 164px);
+      z-index: 10000;
+      width: clamp(40px, 3vw, 100px);
+      height: clamp(40px, 3vw, 100px);
+      border-radius: 50%;
+      border: none;
+      background: rgba(30,30,30,0.8);
+      color: #aaa;
+      font-size: clamp(16px, 1.2vw, 40px);
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition: background 0.2s, transform 0.2s, opacity 0.3s;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+    .smudge-list-btn.visible { display: flex; }
+    .smudge-list-btn:hover { background: rgba(50,50,50,0.9); transform: scale(1.08); }
+
+    .smudge-list-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: clamp(300px, 25vw, 500px);
+      height: 100%;
+      background: rgba(20, 18, 16, 0.96);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-left: 1px solid rgba(255,255,255,0.08);
+      z-index: 10003;
+      overflow-y: auto;
+      transform: translateX(100%);
+      transition: transform 0.3s ease;
+      font-family: 'Georgia', serif;
+      color: #ddd;
+    }
+    .smudge-list-panel.open { transform: translateX(0); }
+    @media (pointer: coarse) {
+      .smudge-list-panel {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-height: 75vh;
+        border-left: none;
+        border-top: 1px solid rgba(255,255,255,0.12);
+        border-radius: 16px 16px 0 0;
+        transform: translateY(100%);
+      }
+      .smudge-list-panel.open { transform: translateY(0); }
+    }
+    .smudge-list-header {
+      position: sticky;
+      top: 0;
+      background: rgba(20, 18, 16, 0.98);
+      padding: clamp(16px, 1.4vw, 32px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1;
+    }
+    .smudge-list-header h3 {
+      margin: 0;
+      font-size: clamp(14px, 1.1vw, 24px);
+      font-weight: normal;
+      color: #bbb;
+    }
+    .smudge-list-close {
+      background: none;
+      border: none;
+      color: #777;
+      font-size: clamp(18px, 1.4vw, 32px);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .smudge-list-close:hover { background: rgba(255,255,255,0.08); }
+    .smudge-list-items { padding: clamp(8px, 0.6vw, 16px); }
+    .smudge-list-item {
+      padding: clamp(12px, 1vw, 22px);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      cursor: pointer;
+      border-radius: clamp(6px, 0.5vw, 12px);
+      transition: background 0.15s;
+    }
+    .smudge-list-item:hover { background: rgba(255,255,255,0.04); }
+    .smudge-list-item-meta {
+      display: flex;
+      align-items: center;
+      gap: clamp(5px, 0.5vw, 10px);
+      margin-bottom: clamp(4px, 0.3vw, 8px);
+      font-size: clamp(10px, 0.75vw, 18px);
+      color: #888;
+    }
+    .smudge-list-item-avatar {
+      width: clamp(16px, 1.2vw, 28px);
+      height: clamp(16px, 1.2vw, 28px);
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .smudge-list-item-text {
+      font-size: clamp(12px, 0.9vw, 20px);
+      color: #ccc;
+      line-height: 1.5;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .smudge-list-item-jump {
+      font-size: clamp(9px, 0.7vw, 16px);
+      color: #b89860;
+      margin-top: clamp(4px, 0.3vw, 8px);
+      display: inline-block;
+    }
+    .smudge-list-empty {
+      text-align: center;
+      color: #666;
+      padding: clamp(30px, 3vw, 60px);
+      font-size: clamp(13px, 1vw, 22px);
+    }
+
+    @media (pointer: coarse) {
+      .smudge-list-header {
+        position: relative;
+        padding: 24px 18px 16px;
+        justify-content: center;
+      }
+      .smudge-list-header::before {
+        content: '';
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 40px;
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(255,255,255,0.35);
+      }
+      .smudge-list-header h3 { font-size: 19px; }
+      .smudge-list-close {
+        position: absolute;
+        right: 8px;
+        top: 16px;
+        font-size: 32px;
+        padding: 8px 14px;
+        color: #aaa;
+        background: rgba(255,255,255,0.08);
+        border-radius: 50%;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+      }
+      .smudge-list-items { padding: 6px 14px 32px; }
+      .smudge-list-item { padding: 16px 14px; }
+      .smudge-list-item-meta { font-size: 16px; gap: 8px; margin-bottom: 8px; }
+      .smudge-list-item-avatar { width: 28px; height: 28px; }
+      .smudge-list-item-text { font-size: 18px; -webkit-line-clamp: 4; }
+      .smudge-list-item-jump { font-size: 15px; margin-top: 8px; }
+      .smudge-list-empty { font-size: 18px; padding: 40px; }
+    }
+
+    /* ── highlight pulse for jump-to ── */
+    @keyframes smudge-highlight {
+      0%   { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+      30%  { filter: brightness(2) drop-shadow(0 0 20px rgba(200,160,80,0.8)); }
+      100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+    }
+    .smudge-highlight {
+      animation: smudge-highlight 1.2s ease forwards;
+      z-index: 9600 !important;
+    }
   `;
   document.head.appendChild(style);
 }
 
 // ── DOM setup ──────────────────────────────────────────────────────────
-let layer, uiOverlay, toggleBtn, statusEl, pressRing;
+let layer, uiOverlay, toggleBtn, statusEl, pressRing, listBtn, listPanel;
 let activeTooltip = null;
+let tooltipPinned = false; // true when shown via click (stays open), false when via hover
 let activeCompose = null;
-let lastClientX = 0, lastClientY = 0; // track viewport coords for UI positioning
+let lastClientX = 0, lastClientY = 0;
+// Map from smudge element to its comment data (for jump-to highlighting)
+const smudgeElMap = new Map();
 
 function createDOM() {
   // Find the content container (the page's main positioned element)
@@ -475,6 +728,20 @@ function createDOM() {
   statusEl.addEventListener('click', handleSignIn);
   uiOverlay.appendChild(statusEl);
 
+  // List button (shows when layer active)
+  listBtn = document.createElement('button');
+  listBtn.className = 'smudge-list-btn';
+  listBtn.innerHTML = `<svg width="55%" height="55%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>`;
+  listBtn.title = 'view all marks';
+  listBtn.addEventListener('click', toggleListPanel);
+  uiOverlay.appendChild(listBtn);
+
+  // List panel
+  listPanel = document.createElement('div');
+  listPanel.className = 'smudge-list-panel';
+  uiOverlay.appendChild(listPanel);
+  setupListPanelPullDismiss();
+
   // Press indicator (chat bubble with completing ring)
   pressRing = document.createElement('div');
   pressRing.className = 'smudge-press-indicator';
@@ -483,7 +750,7 @@ function createDOM() {
     <path class="bubble" d="M16,14 h16 a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-8 l-4,4 v-4 h-4 a4,4 0 0 1 -4,-4 v-10 a4,4 0 0 1 4,-4z"/>
     <text class="bubble-icon" x="24" y="27" text-anchor="middle" font-size="12">...</text>
   </svg>`;
-  uiOverlay.appendChild(pressRing);
+  layer.appendChild(pressRing);
 
   // Long-press handling on the layer
   setupLongPress();
@@ -491,12 +758,13 @@ function createDOM() {
 
 function toggleLayer() {
   layerVisible = !layerVisible;
-  console.log('[smudge] toggleLayer, visible:', layerVisible, 'layer classes:', layer.className);
   layer.classList.toggle('active', layerVisible);
   toggleBtn.classList.toggle('active', layerVisible);
+  listBtn.classList.toggle('visible', layerVisible);
   if (!layerVisible) {
     closeTooltip();
     closeCompose();
+    closeListPanel();
   }
   updateStatus();
 }
@@ -508,10 +776,14 @@ function updateStatus() {
   }
   if (oauthSession) {
     statusEl.textContent = `signed in as @${oauthSession.handle}`;
-    statusEl.title = 'click to sign out';
+    statusEl.title = 'tap to sign out';
     statusEl.classList.add('visible');
+    clearTimeout(statusEl._fadeTimer);
+    statusEl._fadeTimer = setTimeout(() => {
+      if (oauthSession) statusEl.textContent = 'log out';
+    }, 2000);
   } else {
-    statusEl.textContent = 'tap to sign in with ATProto';
+    statusEl.textContent = 'sign in';
     statusEl.title = 'sign in to leave marks';
     statusEl.classList.add('visible');
   }
@@ -521,6 +793,17 @@ function updateStatus() {
 let pressTimer = null;
 let pressPos = null;
 let pressStartTime = 0;
+let pressPointerId = null;
+const activePointers = new Set();
+
+function cancelPress() {
+  if (pressTimer) {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+  }
+  pressPointerId = null;
+  pressRing.classList.remove('active');
+}
 
 function setupLongPress() {
   console.log('[smudge] setupLongPress, layer:', layer, 'parent:', layer.parentElement);
@@ -528,6 +811,18 @@ function setupLongPress() {
   layer.addEventListener('pointerup', onPressEnd);
   layer.addEventListener('pointercancel', onPressEnd);
   layer.addEventListener('pointermove', onPressMove);
+
+  // Track ALL pointers on the document — if a second finger lands anywhere, cancel
+  document.addEventListener('pointerdown', (e) => {
+    activePointers.add(e.pointerId);
+    if (activePointers.size > 1) cancelPress();
+  }, true);
+  document.addEventListener('pointerup', (e) => activePointers.delete(e.pointerId), true);
+  document.addEventListener('pointercancel', (e) => activePointers.delete(e.pointerId), true);
+
+  // Prevent native context menu on long-press (mobile)
+  // Magnifying glass / text selection suppressed via CSS: user-select:none, -webkit-touch-callout:none, touch-action:manipulation
+  layer.addEventListener('contextmenu', (e) => { if (layerVisible) e.preventDefault(); });
 
   // Close tooltip/compose on clicks in empty space, but not right after a long-press
   layer.addEventListener('click', (e) => {
@@ -545,10 +840,12 @@ function setupLongPress() {
 }
 
 function onPressStart(e) {
-  console.log('[smudge] pointerdown, target:', e.target, 'isLayer:', e.target === layer, 'layerVisible:', layerVisible);
   // Only trigger on the layer background, not on smudges or popups
   if (e.target !== layer) return;
-  console.log('[smudge] long-press started, will fire in 3s');
+  // Ignore if multiple fingers are already down (pinch/zoom)
+  if (activePointers.size > 1) return;
+
+  pressPointerId = e.pointerId;
 
   // Container-relative coords for storing the smudge position
   const container = layer.parentElement;
@@ -557,47 +854,36 @@ function onPressStart(e) {
     x: e.clientX - cRect.left,
     y: e.clientY - cRect.top,
   };
-  // Viewport coords for UI positioning
   lastClientX = e.clientX;
   lastClientY = e.clientY;
-  console.log('[smudge] press container pos:', pressPos.x, pressPos.y, 'viewport:', lastClientX, lastClientY);
-
   pressStartTime = Date.now();
 
-  // Show progress indicator offset to upper-right of press point
-  pressRing.style.left = (e.clientX + 20) + 'px';
-  pressRing.style.top = (e.clientY - 60) + 'px';
+  // Show progress ring and start long-press timer (both touch and mouse)
+  pressRing.style.left = (pressPos.x + 20) + 'px';
+  pressRing.style.top = (pressPos.y - 60) + 'px';
   pressRing.classList.remove('active');
   void pressRing.offsetWidth; // reflow
   pressRing.classList.add('active');
 
   pressTimer = setTimeout(() => {
-    // long-press elapsed — open compose
-    console.log('[smudge] long-press complete, opening compose at', pressPos.x, pressPos.y);
     pressRing.classList.remove('active');
     closeTooltip();
     closeCompose();
     openCompose(pressPos.x, pressPos.y);
     pressTimer = null;
-  }, 1000); // TODO: restore to 3000
+  }, 1000);
 }
 
-function onPressEnd() {
-  if (pressTimer) {
-    clearTimeout(pressTimer);
-    pressTimer = null;
-  }
-  pressRing.classList.remove('active');
+function onPressEnd(e) {
+  cancelPress();
 }
 
 function onPressMove(e) {
-  if (!pressTimer || !pressPos) return;
+  if (!pressTimer || !pressPos || e.pointerId !== pressPointerId) return;
   const dx = e.clientX - lastClientX;
   const dy = e.clientY - lastClientY;
-  if (Math.sqrt(dx * dx + dy * dy) > 20) {
-    clearTimeout(pressTimer);
-    pressTimer = null;
-    pressRing.classList.remove('active');
+  if (Math.sqrt(dx * dx + dy * dy) > 10) {
+    cancelPress();
   }
 }
 
@@ -606,6 +892,7 @@ function closeTooltip() {
   if (activeTooltip) {
     activeTooltip.remove();
     activeTooltip = null;
+    tooltipPinned = false;
   }
 }
 
@@ -617,7 +904,6 @@ function showTooltip(comment, smudgeEl) {
 
   // Measure off-screen first to get dimensions
   tip.style.visibility = 'hidden';
-  tip.style.position = 'fixed';
   tip.style.left = '0';
   tip.style.top = '0';
 
@@ -675,26 +961,24 @@ function showTooltip(comment, smudgeEl) {
     });
   }
 
-  // Append hidden to measure, then position in one step
-  uiOverlay.appendChild(tip);
+  // Position tooltip in the layer near the smudge
+  layer.appendChild(tip);
   const tipW = tip.offsetWidth;
   const tipH = tip.offsetHeight;
-  const smudgeRect = smudgeEl.getBoundingClientRect();
-  const pad = 10;
+  const smLeft = parseFloat(smudgeEl.style.left) || 0;
+  const smTop = parseFloat(smudgeEl.style.top) || 0;
+  const smW = smudgeEl.offsetWidth;
+  const smH = smudgeEl.offsetHeight;
 
-  let x = smudgeRect.left + smudgeRect.width / 2 - tipW / 2;
-  let y = smudgeRect.top - 8 - tipH;
-
-  // Clamp horizontally
-  if (x < pad) x = pad;
-  if (x + tipW > window.innerWidth - pad) x = window.innerWidth - pad - tipW;
-
-  // Flip below if no room above
-  if (y < pad) y = smudgeRect.bottom + 8;
+  let x = smLeft + smW / 2 - tipW / 2;
+  let y = smTop - 8 - tipH;
+  const layerW = layer.offsetWidth || 1800;
+  if (x < 10) x = 10;
+  if (x + tipW > layerW - 10) x = layerW - 10 - tipW;
+  if (y < 10) y = smTop + smH + 8;
 
   tip.style.left = x + 'px';
   tip.style.top = y + 'px';
-  tip.style.transform = 'none';
   tip.style.visibility = 'visible';
   activeTooltip = tip;
 }
@@ -707,14 +991,59 @@ function closeCompose() {
   }
 }
 
+function scaleMobilePopup(popup) {
+  if (!isMobile || !window.visualViewport) return;
+  const scale = window.visualViewport.width / (window.screen.width || 375);
+  const fs = Math.round(15 * scale);
+  const pad = Math.round(18 * scale);
+  const radius = Math.round(12 * scale);
+
+  popup.style.fontSize = fs + 'px';
+  popup.style.padding = pad + 'px';
+  popup.style.borderRadius = radius + 'px';
+
+  popup.querySelectorAll('h3').forEach(el => {
+    el.style.fontSize = Math.round(17 * scale) + 'px';
+    el.style.marginBottom = Math.round(14 * scale) + 'px';
+  });
+  popup.querySelectorAll('textarea').forEach(el => {
+    el.style.fontSize = fs + 'px';
+    el.style.padding = Math.round(10 * scale) + 'px';
+    el.style.borderRadius = Math.round(8 * scale) + 'px';
+    el.style.minHeight = Math.round(80 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-btn').forEach(el => {
+    el.style.fontSize = Math.round(14 * scale) + 'px';
+    el.style.padding = `${Math.round(10 * scale)}px ${Math.round(20 * scale)}px`;
+    el.style.borderRadius = Math.round(8 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-auth-btn').forEach(el => {
+    el.style.fontSize = fs + 'px';
+    el.style.padding = `${Math.round(12 * scale)}px ${Math.round(16 * scale)}px`;
+    el.style.borderRadius = Math.round(8 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-nudge').forEach(el => {
+    el.style.fontSize = fs + 'px';
+  });
+  popup.querySelectorAll('input[type="text"]').forEach(el => {
+    el.style.fontSize = fs + 'px';
+    el.style.padding = Math.round(10 * scale) + 'px';
+    el.style.borderRadius = Math.round(8 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-signin-hint').forEach(el => {
+    el.style.fontSize = Math.round(13 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-signin-actions').forEach(el => {
+    el.style.gap = Math.round(8 * scale) + 'px';
+    el.style.marginTop = Math.round(14 * scale) + 'px';
+  });
+}
+
 function openCompose(containerX, containerY) {
   closeCompose();
 
   const popup = document.createElement('div');
   popup.className = 'smudge-compose';
-  // Position using stored viewport coords
-  popup.style.left = lastClientX + 'px';
-  popup.style.top = (lastClientY + 10) + 'px';
 
   // Decide what to show based on auth state
   if (oauthSession) {
@@ -723,19 +1052,38 @@ function openCompose(containerX, containerY) {
     showAuthChoice(popup, containerX, containerY);
   }
 
-  uiOverlay.appendChild(popup);
-  activeCompose = popup;
+  if (isMobile && window.visualViewport) {
+    const vv = window.visualViewport;
+    // Use 90% of the visual viewport width, centered within it
+    const pw = Math.round(vv.width * 0.9);
+    const ml = Math.round(vv.width * 0.05);
 
-  // Adjust position if off-screen
-  requestAnimationFrame(() => {
-    const r = popup.getBoundingClientRect();
-    if (r.right > window.innerWidth - 20) {
-      popup.style.left = Math.max(10, window.innerWidth - r.width - 20) + 'px';
-    }
-    if (r.bottom > window.innerHeight - 20) {
-      popup.style.top = Math.max(10, window.innerHeight - r.height - 20) + 'px';
-    }
-  });
+    popup.style.position = 'fixed';
+    popup.style.width = pw + 'px';
+    popup.style.maxWidth = 'none';
+    popup.style.left = (vv.offsetLeft + ml) + 'px';
+    popup.style.top = (vv.offsetTop + vv.height * 0.2) + 'px';
+    popup.style.transform = 'none';
+    scaleMobilePopup(popup);
+    uiOverlay.appendChild(popup);
+  } else {
+    // Desktop: position in layer near the press point
+    layer.appendChild(popup);
+    const popW = popup.offsetWidth;
+    const popH = popup.offsetHeight;
+    const layerW = layer.offsetWidth || 1800;
+    const layerH = layer.offsetHeight || 6800;
+
+    let x = containerX - popW / 2;
+    let y = containerY + 20;
+    if (x < 10) x = 10;
+    if (x + popW > layerW - 10) x = layerW - 10 - popW;
+    if (y + popH > layerH - 10) y = containerY - popH - 10;
+
+    popup.style.left = x + 'px';
+    popup.style.top = y + 'px';
+  }
+  activeCompose = popup;
 }
 
 function showAuthChoice(popup, x, y) {
@@ -751,6 +1099,8 @@ function showAuthChoice(popup, x, y) {
       <button class="smudge-btn smudge-btn-secondary" data-action="cancel">cancel</button>
     </div>
   `;
+
+  scaleMobilePopup(popup);
 
   popup.querySelector('[data-action="signin"]').addEventListener('click', () => {
     handleSignIn();
@@ -776,6 +1126,7 @@ function showNudge(popup, x, y) {
       <button class="smudge-btn smudge-btn-secondary" data-action="stay-anon">stay anonymous</button>
     </div>
   `;
+  scaleMobilePopup(popup);
 
   popup.querySelector('[data-action="signup"]').addEventListener('click', () => {
     closeCompose();
@@ -800,6 +1151,8 @@ function showComposeForm(popup, x, y, mode) {
       <button class="smudge-btn smudge-btn-primary" data-action="submit">leave mark</button>
     </div>
   `;
+
+  scaleMobilePopup(popup);
 
   const textarea = popup.querySelector('textarea');
   const submitBtn = popup.querySelector('[data-action="submit"]');
@@ -827,6 +1180,231 @@ function showComposeForm(popup, x, y, mode) {
       submitBtn.disabled = false;
     }
   });
+}
+
+// ── list panel ──────────────────────────────────────────────────────────
+function positionListPanelMobile() {
+  if (!isMobile) return;
+  // Page scroll is locked so we can use simple fixed positioning
+  // Reset any viewport-tracking styles
+  listPanel.style.left = '0';
+  listPanel.style.width = '100%';
+  listPanel.style.bottom = '0';
+  listPanel.style.top = 'auto';
+  listPanel.style.maxHeight = '75vh';
+}
+
+let _scrollLockPos = null;
+
+function lockPageScroll() {
+  if (_scrollLockPos !== null) return;
+  _scrollLockPos = { x: window.scrollX, y: window.scrollY };
+  document.body.style.overflow = 'hidden';
+  document.body.style.touchAction = 'none';
+  // iOS Safari needs position:fixed to truly prevent scroll, but that
+  // resets scroll position, so we compensate with negative top
+  document.body.style.position = 'fixed';
+  document.body.style.top = -_scrollLockPos.y + 'px';
+  document.body.style.left = -_scrollLockPos.x + 'px';
+  document.body.style.width = '100%';
+}
+
+function unlockPageScroll() {
+  if (_scrollLockPos === null) return;
+  document.body.style.overflow = '';
+  document.body.style.touchAction = '';
+  document.body.style.position = '';
+  document.body.style.top = '';
+  document.body.style.left = '';
+  document.body.style.width = '';
+  window.scrollTo(_scrollLockPos.x, _scrollLockPos.y);
+  _scrollLockPos = null;
+}
+
+function toggleListPanel() {
+  listPanel.classList.toggle('open');
+  if (listPanel.classList.contains('open')) {
+    positionListPanelMobile();
+    populateListPanel();
+    if (isMobile) lockPageScroll();
+  } else {
+    if (isMobile) unlockPageScroll();
+  }
+}
+
+function closeListPanel() {
+  listPanel.classList.remove('open');
+  listPanel.style.transform = '';
+  listPanel.style.transition = '';
+  if (isMobile) unlockPageScroll();
+}
+
+function setupListPanelPullDismiss() {
+  if (!isMobile) return;
+  let startY = null;
+  let currentY = 0;
+
+  listPanel.addEventListener('touchstart', (e) => {
+    // Only pull-to-dismiss if scrolled to top of list
+    if (listPanel.scrollTop > 5) return;
+    startY = e.touches[0].clientY;
+    currentY = 0;
+    listPanel.style.transition = 'none';
+  }, { passive: true });
+
+  listPanel.addEventListener('touchmove', (e) => {
+    if (startY === null) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy < 0) { currentY = 0; listPanel.style.transform = ''; return; }
+    currentY = dy;
+    listPanel.style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+
+  listPanel.addEventListener('touchend', () => {
+    if (startY === null) return;
+    startY = null;
+    if (currentY > 80) {
+      // Dismiss
+      listPanel.style.transition = 'transform 0.25s ease';
+      listPanel.style.transform = 'translateY(100%)';
+      setTimeout(() => closeListPanel(), 250);
+    } else {
+      // Snap back
+      listPanel.style.transition = 'transform 0.2s ease';
+      listPanel.style.transform = '';
+    }
+    currentY = 0;
+  }, { passive: true });
+}
+
+function populateListPanel() {
+  // Sort comments top-to-bottom by positionY
+  const sorted = [...comments].sort((a, b) => (a.positionY || 0) - (b.positionY || 0));
+
+  let html = `
+    <div class="smudge-list-header">
+      <h3>all marks (${comments.length})</h3>
+      <button class="smudge-list-close">&times;</button>
+    </div>
+    <div class="smudge-list-items">
+  `;
+
+  if (sorted.length === 0) {
+    html += `<div class="smudge-list-empty">no marks yet</div>`;
+  }
+
+  for (let i = 0; i < sorted.length; i++) {
+    const c = sorted[i];
+    const profile = profileCache[c.did] || {};
+
+    let metaHtml;
+    if (c.source === 'isso') {
+      metaHtml = `
+        <span style="font-style:italic; color:#777;">anonymous</span>
+        <span style="color:#555;">&middot;</span>
+        <span style="color:#666;">${formatTime(c.createdAt)}</span>
+      `;
+    } else {
+      const avatarHtml = profile.avatar
+        ? `<img class="smudge-list-item-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
+        : '';
+      const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
+      const displayName = profile.displayName || '';
+      const nameHtml = displayName
+        ? `<strong>${escapeHtml(displayName)}</strong>`
+        : `<span style="color:#aaa;">@${escapeHtml(handle)}</span>`;
+      metaHtml = `
+        ${avatarHtml} ${nameHtml}
+        <span style="color:#555;">&middot;</span>
+        <span style="color:#666;">${formatTime(c.createdAt)}</span>
+      `;
+    }
+
+    html += `
+      <div class="smudge-list-item" data-idx="${i}">
+        <div class="smudge-list-item-meta">${metaHtml}</div>
+        <div class="smudge-list-item-text">${escapeHtml(c.text)}</div>
+        <span class="smudge-list-item-jump">jump to &rarr;</span>
+      </div>
+    `;
+  }
+
+  html += `</div>`;
+  listPanel.innerHTML = html;
+
+  // Close button
+  listPanel.querySelector('.smudge-list-close').addEventListener('click', closeListPanel);
+
+  // Jump-to handlers
+  listPanel.querySelectorAll('.smudge-list-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const idx = parseInt(item.dataset.idx, 10);
+      const c = sorted[idx];
+      if (isMobile) closeListPanel();
+      jumpToComment(c);
+    });
+  });
+}
+
+function commentKey(c) {
+  if (c.did && c.rkey) return `atproto:${c.did}:${c.rkey}`;
+  if (c.source === 'isso' && c.id != null) return `isso:${c.id}`;
+  return `pos:${c.positionX}:${c.positionY}:${c.text}`;
+}
+
+function jumpToComment(comment) {
+  // Find the smudge element for this comment
+  const key = commentKey(comment);
+  let targetEl = null;
+  for (const [el, arr] of smudgeElMap) {
+    if (arr.some(c => commentKey(c) === key)) {
+      targetEl = el;
+      break;
+    }
+  }
+
+  // Get the element's page position (or fall back to comment coords)
+  let elX, elY;
+  if (targetEl) {
+    const rect = targetEl.getBoundingClientRect();
+    elX = rect.left + window.scrollX + rect.width / 2;
+    elY = rect.top + window.scrollY + rect.height / 2;
+  } else {
+    elX = comment.positionX || 0;
+    elY = comment.positionY || 0;
+  }
+
+  // Account for the list panel taking up space on the right
+  const panelW = (listPanel && listPanel.classList.contains('open'))
+    ? listPanel.offsetWidth : 0;
+  const availW = window.innerWidth - panelW;
+  const availH = window.innerHeight;
+
+  // Scroll so the smudge is centered in the available area
+  const scrollX = elX - availW / 2;
+  const scrollY = elY - availH / 2;
+  window.scrollTo({ left: scrollX, top: scrollY, behavior: 'smooth' });
+
+  // Highlight pulse
+  if (targetEl) {
+    targetEl.classList.remove('smudge-highlight');
+    void targetEl.offsetWidth;
+    targetEl.classList.add('smudge-highlight');
+    setTimeout(() => targetEl.classList.remove('smudge-highlight'), 1500);
+  }
+}
+
+// ── clustering ──────────────────────────────────────────────────────────
+function clusterComments(commentList, cellSize = 150) {
+  const cells = {};
+  for (const c of commentList) {
+    const cx = Math.floor((c.positionX || 0) / cellSize);
+    const cy = Math.floor((c.positionY || 0) / cellSize);
+    const key = `${cx},${cy}`;
+    if (!cells[key]) cells[key] = [];
+    cells[key].push(c);
+  }
+  return Object.values(cells);
 }
 
 // ── ATProto comment submission ─────────────────────────────────────────
@@ -937,7 +1515,7 @@ async function submitIssoComment(text, posX, posY) {
 // ── OAuth sign-in ──────────────────────────────────────────────────────
 async function initOAuth() {
   try {
-    const { BrowserOAuthClient, Agent } = await import('./oauth-client-browser.js');
+    const { BrowserOAuthClient, Agent } = await import('./oauth-client-browser.js?v=2');
     AgentClass = Agent;
 
     const clientMetadataUrl = CONFIG.oauthClientId.startsWith('http')
@@ -1014,19 +1592,12 @@ async function handleSignIn() {
     return;
   }
 
-  try {
-    if (!oauthClient) {
-      await initOAuth();
-    }
-    if (!oauthClient) {
-      console.error('[smudge] OAuth client not available');
-      return;
-    }
+  // Show popup immediately (synchronous from tap) so iOS allows input.focus()
+  showSignInPopup();
 
-    // Show sign-in popup
-    showSignInPopup();
-  } catch (err) {
-    console.error('[smudge] sign-in error:', err);
+  // Init OAuth in background if needed — sign-in button will await it
+  if (!oauthClient) {
+    initOAuth().catch(err => console.error('[smudge] OAuth init error:', err));
   }
 }
 
@@ -1067,6 +1638,8 @@ function showSignInPopup() {
     signinBtn.disabled = true;
     signinBtn.textContent = 'connecting...';
     try {
+      if (!oauthClient) await initOAuth();
+      if (!oauthClient) throw new Error('OAuth client not available');
       sessionStorage.setItem('smudge_return_to', window.location.href);
       await oauthClient.signIn(handle);
     } catch (err) {
@@ -1087,9 +1660,25 @@ function showSignInPopup() {
   });
   popup.querySelector('[data-action="cancel"]').addEventListener('click', closeSignIn);
 
+  if (isMobile && window.visualViewport) {
+    const vv = window.visualViewport;
+    const pw = Math.round(vv.width * 0.9);
+    const ml = Math.round(vv.width * 0.05);
+
+    popup.style.position = 'fixed';
+    popup.style.width = pw + 'px';
+    popup.style.maxWidth = 'none';
+    popup.style.left = (vv.offsetLeft + ml) + 'px';
+    popup.style.top = (vv.offsetTop + vv.height * 0.2) + 'px';
+    popup.style.transform = 'none';
+    scaleMobilePopup(popup);
+  }
+
   uiOverlay.appendChild(popup);
   activeSignIn = popup;
-  requestAnimationFrame(() => input.focus());
+  // iOS Safari only allows focus() with keyboard within the synchronous
+  // call stack of a user gesture — no rAF or setTimeout wrappers
+  input.focus();
 }
 
 // ── loading comments ───────────────────────────────────────────────────
@@ -1204,63 +1793,192 @@ function createSmudgeSVG(seed, w, h, rotation) {
   return { svg, hue };
 }
 
+function createSingleSmudge(comment) {
+  const seed = hashStr(comment.text + (comment.did || '') + comment.createdAt);
+  const rand = seededRandom(seed);
+
+  const sizeBase = comment.source === 'isso' ? 0.7 : 1;
+  const w = Math.round((50 + rand() * 30) * sizeBase);
+  const h = Math.round((30 + rand() * 20) * sizeBase);
+  const rotation = Math.round(rand() * 60 - 30);
+
+  const smudge = document.createElement('div');
+  smudge.className = 'smudge' + (comment.source === 'isso' ? ' isso-smudge' : '');
+  smudge.style.left = ((comment.positionX || 0) - w / 2) + 'px';
+  smudge.style.top = ((comment.positionY || 0) - h / 2) + 'px';
+  smudge.style.width = w + 'px';
+  smudge.style.height = h + 'px';
+
+  const { svg, hue } = createSmudgeSVG(seed, w, h, rotation);
+  smudge.appendChild(svg);
+
+  const shimmerHue = Math.floor(Math.random() * 360);
+  const shimmer = document.createElement('div');
+  shimmer.className = 'smudge-shimmer';
+  shimmer.style.transform = `rotate(${rotation}deg)`;
+  shimmer.style.background = `conic-gradient(
+    from ${shimmerHue}deg,
+    hsla(${shimmerHue}, 80%, 70%, 0.3),
+    hsla(${(shimmerHue+60)%360}, 80%, 65%, 0.2),
+    hsla(${(shimmerHue+120)%360}, 70%, 60%, 0.3),
+    hsla(${(shimmerHue+180)%360}, 80%, 65%, 0.2),
+    hsla(${(shimmerHue+240)%360}, 75%, 70%, 0.3),
+    hsla(${(shimmerHue+300)%360}, 80%, 65%, 0.2),
+    hsla(${(shimmerHue+360)%360}, 80%, 70%, 0.3)
+  )`;
+  smudge.appendChild(shimmer);
+
+  smudge.addEventListener('mouseenter', () => {
+    if (!activeCompose && !tooltipPinned) showTooltip(comment, smudge);
+  });
+  smudge.addEventListener('mouseleave', () => {
+    if (activeTooltip && !tooltipPinned) closeTooltip();
+  });
+  smudge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCompose();
+    showTooltip(comment, smudge);
+    tooltipPinned = true;
+  });
+
+  smudgeElMap.set(smudge, [comment]);
+  return smudge;
+}
+
+function createClusterEl(cluster) {
+  // Centroid position
+  const cx = cluster.reduce((s, c) => s + (c.positionX || 0), 0) / cluster.length;
+  const cy = cluster.reduce((s, c) => s + (c.positionY || 0), 0) / cluster.length;
+
+  // Use the first comment's seed for the smudge visual
+  const first = cluster[0];
+  const seed = hashStr(first.text + (first.did || '') + first.createdAt);
+  const rand = seededRandom(seed);
+
+  const w = Math.round(60 + cluster.length * 5);
+  const h = Math.round(40 + cluster.length * 3);
+  const rotation = Math.round(rand() * 40 - 20);
+
+  const el = document.createElement('div');
+  el.className = 'smudge-cluster';
+  el.style.left = (cx - w / 2) + 'px';
+  el.style.top = (cy - h / 2) + 'px';
+  el.style.width = w + 'px';
+  el.style.height = h + 'px';
+
+  const { svg } = createSmudgeSVG(seed, w, h, rotation);
+  el.appendChild(svg);
+
+  // Count badge
+  const badge = document.createElement('div');
+  badge.className = 'smudge-cluster-count';
+  badge.textContent = cluster.length;
+  el.appendChild(badge);
+
+  // Hover to show cluster tooltip (desktop)
+  el.addEventListener('mouseenter', () => {
+    if (!activeCompose && !tooltipPinned) showClusterTooltip(cluster, el);
+  });
+  el.addEventListener('mouseleave', () => {
+    if (activeTooltip && !tooltipPinned) closeTooltip();
+  });
+  // Click/tap to show cluster tooltip
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCompose();
+    showClusterTooltip(cluster, el);
+    tooltipPinned = true;
+  });
+
+  // Register all comments in the cluster to this element (for jump-to)
+  smudgeElMap.set(el, cluster);
+
+  return el;
+}
+
+function showClusterTooltip(cluster, clusterEl) {
+  closeTooltip();
+
+  const tip = document.createElement('div');
+  tip.className = 'smudge-tooltip';
+  tip.style.visibility = 'hidden';
+  tip.style.left = '0';
+  tip.style.top = '0';
+  tip.style.maxHeight = '300px';
+  tip.style.overflowY = 'auto';
+
+  let html = '';
+  for (const c of cluster) {
+    const profile = profileCache[c.did] || {};
+    if (c.source === 'isso') {
+      html += `
+        <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.06);">
+          <div class="smudge-tooltip-meta">
+            <span class="smudge-tooltip-anon">anonymous</span>
+            <span class="smudge-tooltip-sep">&middot;</span>
+            <span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>
+          </div>
+          <div class="smudge-tooltip-text">${escapeHtml(c.text)}</div>
+        </div>`;
+    } else {
+      const avatarHtml = profile.avatar
+        ? `<img class="smudge-tooltip-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
+        : '';
+      const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
+      const displayName = profile.displayName || '';
+      const nameHtml = displayName
+        ? `<strong>${escapeHtml(displayName)}</strong>`
+        : `<span class="smudge-tooltip-handle">@${escapeHtml(handle)}</span>`;
+      html += `
+        <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.06);">
+          <div class="smudge-tooltip-meta">
+            ${avatarHtml} ${nameHtml}
+            <span class="smudge-tooltip-sep">&middot;</span>
+            <span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>
+          </div>
+          <div class="smudge-tooltip-text">${escapeHtml(c.text)}</div>
+        </div>`;
+    }
+  }
+  // Remove last border
+  tip.innerHTML = html;
+  const lastChild = tip.querySelector('div:last-child');
+  if (lastChild) lastChild.style.borderBottom = 'none';
+
+  layer.appendChild(tip);
+  const tipW = tip.offsetWidth;
+  const tipH = tip.offsetHeight;
+  const smLeft = parseFloat(clusterEl.style.left) || 0;
+  const smTop = parseFloat(clusterEl.style.top) || 0;
+  const smW = clusterEl.offsetWidth;
+  const smH = clusterEl.offsetHeight;
+
+  let x = smLeft + smW / 2 - tipW / 2;
+  let y = smTop - 8 - tipH;
+  const layerW = layer.offsetWidth || 1800;
+  if (x < 10) x = 10;
+  if (x + tipW > layerW - 10) x = layerW - 10 - tipW;
+  if (y < 10) y = smTop + smH + 8;
+
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+  tip.style.visibility = 'visible';
+  activeTooltip = tip;
+}
+
 function renderSmudges() {
-  layer.querySelectorAll('.smudge').forEach(el => el.remove());
+  layer.querySelectorAll('.smudge, .smudge-cluster').forEach(el => el.remove());
+  smudgeElMap.clear();
   smudgeCounter = 0;
-  console.log('[smudge] rendering', comments.length, 'smudges');
 
-  for (const comment of comments) {
-    const seed = hashStr(comment.text + (comment.did || '') + comment.createdAt);
-    const rand = seededRandom(seed);
+  const clusters = clusterComments(comments, 150);
 
-    const sizeBase = comment.source === 'isso' ? 0.7 : 1;
-    const w = Math.round((50 + rand() * 30) * sizeBase);
-    const h = Math.round((30 + rand() * 20) * sizeBase);
-    const rotation = Math.round(rand() * 60 - 30);
-
-    const smudge = document.createElement('div');
-    smudge.className = 'smudge' + (comment.source === 'isso' ? ' isso-smudge' : '');
-    smudge.style.left = ((comment.positionX || 0) - w / 2) + 'px';
-    smudge.style.top = ((comment.positionY || 0) - h / 2) + 'px';
-    smudge.style.width = w + 'px';
-    smudge.style.height = h + 'px';
-
-    const { svg, hue } = createSmudgeSVG(seed, w, h, rotation);
-    smudge.appendChild(svg);
-
-    // Shimmer overlay with independent random hue
-    const shimmerHue = Math.floor(Math.random() * 360);
-    const shimmer = document.createElement('div');
-    shimmer.className = 'smudge-shimmer';
-    shimmer.style.transform = `rotate(${rotation}deg)`;
-    shimmer.style.background = `conic-gradient(
-      from ${shimmerHue}deg,
-      hsla(${shimmerHue}, 80%, 70%, 0.3),
-      hsla(${(shimmerHue+60)%360}, 80%, 65%, 0.2),
-      hsla(${(shimmerHue+120)%360}, 70%, 60%, 0.3),
-      hsla(${(shimmerHue+180)%360}, 80%, 65%, 0.2),
-      hsla(${(shimmerHue+240)%360}, 75%, 70%, 0.3),
-      hsla(${(shimmerHue+300)%360}, 80%, 65%, 0.2),
-      hsla(${(shimmerHue+360)%360}, 80%, 70%, 0.3)
-    )`;
-    smudge.appendChild(shimmer);
-
-    smudge.addEventListener('mouseenter', () => {
-      if (!activeCompose) showTooltip(comment, smudge);
-    });
-    smudge.addEventListener('mouseleave', () => {
-      // Only dismiss if tooltip doesn't have a delete button (not "pinned")
-      if (activeTooltip && !activeTooltip.querySelector('[data-action="delete"]')) {
-        closeTooltip();
-      }
-    });
-    smudge.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeCompose();
-      showTooltip(comment, smudge);
-    });
-
-    layer.appendChild(smudge);
+  for (const cluster of clusters) {
+    if (cluster.length === 1) {
+      layer.appendChild(createSingleSmudge(cluster[0]));
+    } else {
+      layer.appendChild(createClusterEl(cluster));
+    }
   }
 }
 
@@ -1295,10 +2013,76 @@ function hashStr(s) {
   return Math.abs(h);
 }
 
+// ── zoom compensation (mobile) ──────────────────────────────────────────
+function setupZoomCompensation() {
+  const vv = window.visualViewport;
+  if (!vv || !isMobile) return;
+
+  const screenW = window.screen.width || 375;
+
+  // On iOS Safari, position:fixed is relative to the LAYOUT viewport,
+  // not the visual viewport. When pinch-zoomed, we must manually
+  // reposition buttons to track what the user actually sees.
+  function update() {
+    const scale = vv.width / screenW;
+    // Cap sizes so they never exceed 12% of the smaller viewport dimension
+    const maxSize = Math.min(vv.width, vv.height) * 0.12;
+    const margin = Math.min(Math.round(16 * scale), maxSize * 0.4);
+    const btnSize = Math.min(Math.round(48 * scale), maxSize);
+    const listBtnSize = Math.min(Math.round(40 * scale), maxSize * 0.85);
+
+    // Position toggle button at bottom-right of VISUAL viewport
+    toggleBtn.style.position = 'fixed';
+    toggleBtn.style.bottom = 'auto';
+    toggleBtn.style.right = 'auto';
+    toggleBtn.style.left = (vv.offsetLeft + vv.width - btnSize - margin) + 'px';
+    toggleBtn.style.top = (vv.offsetTop + vv.height - btnSize - margin) + 'px';
+    toggleBtn.style.width = btnSize + 'px';
+    toggleBtn.style.height = btnSize + 'px';
+    toggleBtn.style.fontSize = Math.round(20 * scale) + 'px';
+
+    // Position list button to the left of toggle
+    listBtn.style.position = 'fixed';
+    listBtn.style.bottom = 'auto';
+    listBtn.style.right = 'auto';
+    listBtn.style.left = (vv.offsetLeft + vv.width - btnSize - margin - listBtnSize - Math.round(8 * scale)) + 'px';
+    listBtn.style.top = (vv.offsetTop + vv.height - listBtnSize - margin + Math.round((btnSize - listBtnSize) / 2)) + 'px';
+    listBtn.style.width = listBtnSize + 'px';
+    listBtn.style.height = listBtnSize + 'px';
+
+    // Position status above toggle, right-aligned with button's right edge
+    // Toggle's right edge in layout coords:
+    const toggleRightLC = vv.offsetLeft + vv.width - margin;
+    const toggleTop = vv.offsetTop + vv.height - btnSize - margin;
+    const layoutW = document.documentElement.clientWidth || window.innerWidth;
+    const fs = Math.min(Math.round(13 * scale), btnSize * 0.3);
+    const padV = Math.min(Math.round(8 * scale), btnSize * 0.16);
+    const padH = Math.min(Math.round(12 * scale), btnSize * 0.25);
+    statusEl.style.position = 'fixed';
+    statusEl.style.bottom = 'auto';
+    statusEl.style.left = 'auto';
+    // right = distance from layout viewport right edge to toggle's right edge
+    statusEl.style.right = (layoutW - toggleRightLC) + 'px';
+    statusEl.style.fontSize = fs + 'px';
+    statusEl.style.padding = `${padV}px ${padH}px`;
+    statusEl.style.borderRadius = Math.round(20 * scale) + 'px';
+    statusEl.style.whiteSpace = 'nowrap';
+    statusEl.style.overflow = 'visible';
+    statusEl.style.textOverflow = 'clip';
+    statusEl.style.maxWidth = 'none';
+    statusEl.style.top = (toggleTop - padV * 2 - fs - Math.round(6 * scale)) + 'px';
+  }
+
+  vv.addEventListener('resize', update);
+  vv.addEventListener('scroll', update);
+  update();
+}
+
 // ── init ───────────────────────────────────────────────────────────────
 async function init() {
   injectStyles();
   createDOM();
+  setupZoomCompensation();
 
   // Try to restore OAuth session (non-blocking)
   initOAuth();
