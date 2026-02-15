@@ -33,6 +33,7 @@ let AgentClass = null;     // stored from dynamic import
 let layerVisible = false;
 let comments = [];
 const profileCache = {};
+const issoOwnedIds = new Set(); // IDs of Isso comments we created (from cookies)
 // Detect touch-primary devices (phones/tablets) via pointer capability, not screen size
 const isMobile = window.matchMedia('(pointer: coarse)').matches;
 
@@ -147,13 +148,14 @@ function injectStyles() {
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: clamp(10px, 0.9vw, 20px);
       padding: clamp(12px, 1vw, 24px) clamp(14px, 1.2vw, 28px);
-      max-width: clamp(240px, 20vw, 480px);
-      min-width: clamp(140px, 12vw, 280px);
+      max-width: clamp(320px, 26vw, 560px);
+      min-width: clamp(200px, 16vw, 340px);
       color: #ddd;
       font-family: 'Georgia', serif;
       font-size: clamp(13px, 1vw, 24px);
       line-height: 1.5;
       pointer-events: auto;
+      touch-action: auto;
       box-shadow: 0 8px 32px rgba(0,0,0,0.6);
       animation: smudge-fade-in 0.2s ease;
     }
@@ -188,11 +190,72 @@ function injectStyles() {
       color: #777;
       font-size: clamp(10px, 0.75vw, 18px);
     }
+    .smudge-tooltip-thread {
+      margin-top: clamp(8px, 0.6vw, 14px);
+      padding-top: clamp(6px, 0.5vw, 12px);
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .smudge-tooltip-thread-item {
+      position: relative;
+      padding-left: clamp(14px, 1.1vw, 24px);
+      margin-top: clamp(8px, 0.5vw, 12px);
+    }
+    .smudge-tooltip-thread-item::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 1px;
+    }
+    .smudge-tooltip-parent-ctx {
+      position: relative;
+      padding-left: clamp(14px, 1.1vw, 24px);
+      margin-bottom: clamp(8px, 0.5vw, 12px);
+      padding-bottom: clamp(6px, 0.5vw, 12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      opacity: 0.65;
+    }
+    .smudge-tooltip-parent-ctx::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 1px;
+    }
+    .smudge-tooltip-parent-ctx .smudge-tooltip-text {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      font-size: clamp(11px, 0.85vw, 20px);
+    }
     .smudge-tooltip-footer {
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
       margin-top: clamp(4px, 0.4vw, 10px);
+      gap: clamp(4px, 0.3vw, 8px);
+    }
+    .smudge-btn-reply {
+      background: none;
+      border: none;
+      color: #8a8;
+      font-family: 'Georgia', serif;
+      font-size: clamp(10px, 0.75vw, 18px);
+      cursor: pointer;
+      padding: clamp(2px, 0.2vw, 6px) clamp(6px, 0.5vw, 12px);
+      border-radius: clamp(4px, 0.4vw, 8px);
+      transition: background 0.15s, color 0.15s;
+    }
+    .smudge-btn-reply:hover {
+      background: rgba(80, 180, 80, 0.2);
+      color: #aca;
     }
     .smudge-btn-delete {
       background: none;
@@ -309,6 +372,73 @@ function injectStyles() {
       outline: none;
       border-color: rgba(255,255,255,0.2);
     }
+    .smudge-compose-identity {
+      display: flex;
+      gap: clamp(6px, 0.5vw, 12px);
+      margin-bottom: clamp(8px, 0.7vw, 16px);
+    }
+    .smudge-compose-identity input {
+      flex: 1;
+      min-width: 0;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: clamp(6px, 0.6vw, 14px);
+      color: #ddd;
+      font-family: 'Georgia', serif;
+      font-size: clamp(12px, 0.9vw, 18px);
+      padding: clamp(6px, 0.5vw, 12px) clamp(8px, 0.7vw, 16px);
+    }
+    .smudge-compose-identity input:focus {
+      outline: none;
+      border-color: rgba(255,255,255,0.25);
+    }
+    .smudge-compose-identity input::placeholder { color: #555; }
+    .smudge-compose-reply-context {
+      font-size: clamp(10px, 0.75vw, 16px);
+      color: #999;
+      margin-bottom: clamp(6px, 0.5vw, 12px);
+      padding: clamp(6px, 0.4vw, 10px) clamp(8px, 0.6vw, 14px);
+      border-left: 2px solid rgba(120, 180, 120, 0.4);
+      background: rgba(120, 180, 120, 0.05);
+      border-radius: 0 clamp(4px, 0.4vw, 8px) clamp(4px, 0.4vw, 8px) 0;
+    }
+    .smudge-reply-author {
+      color: #8a8;
+      margin-bottom: clamp(2px, 0.2vw, 4px);
+    }
+    .smudge-reply-author strong { color: #aaa; font-weight: 600; }
+    .smudge-reply-quote {
+      color: #888;
+      font-style: italic;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .smudge-list-item-reply {
+      position: relative;
+      border-left: 2px solid rgba(255,255,255,0.1);
+      padding-left: clamp(10px, 0.8vw, 18px);
+      margin-top: 0;
+      border-bottom: none;
+    }
+    .smudge-list-item-reply + .smudge-list-item:not(.smudge-list-item-reply) {
+      margin-top: clamp(4px, 0.3vw, 8px);
+    }
+    .smudge-tooltip-identicon {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .smudge-tooltip-identicon svg { display: block; }
+    .smudge-list-item-identicon {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .smudge-list-item-identicon svg { display: block; }
     .smudge-compose-actions {
       display: flex;
       justify-content: flex-end;
@@ -672,6 +802,62 @@ function injectStyles() {
       .smudge-list-item-text { font-size: 18px; -webkit-line-clamp: 4; }
       .smudge-list-item-jump { font-size: 15px; margin-top: 8px; }
       .smudge-list-empty { font-size: 18px; padding: 40px; }
+      .smudge-tooltip {
+        min-width: 240px;
+        max-width: 85vw;
+      }
+      .smudge-tooltip-meta {
+        font-size: 14px;
+        gap: 6px;
+      }
+      .smudge-tooltip-text {
+        font-size: 16px;
+      }
+      .smudge-tooltip-footer {
+        margin-top: 10px;
+        gap: 8px;
+      }
+      .smudge-btn-reply,
+      .smudge-btn-delete {
+        font-size: 15px;
+        padding: 10px 16px;
+        min-height: 44px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.08);
+      }
+      .smudge-btn-reply {
+        color: #9c9;
+        background: rgba(80, 160, 80, 0.12);
+      }
+      .smudge-btn-delete {
+        color: #c99;
+        background: rgba(180, 100, 80, 0.12);
+      }
+      .smudge-btn-reply:active { background: rgba(80, 180, 80, 0.3); }
+      .smudge-btn-delete:active { background: rgba(180, 80, 80, 0.3); }
+      .smudge-tooltip-footer {
+        display: flex;
+        gap: 8px;
+      }
+      .smudge-tooltip-avatar {
+        width: 24px;
+        height: 24px;
+      }
+      .smudge-tooltip-identicon svg {
+        width: 24px;
+        height: 24px;
+      }
+      .smudge-tooltip-thread-item,
+      .smudge-tooltip-parent-ctx {
+        padding-left: 14px;
+      }
+      .smudge-tooltip-thread-item .smudge-tooltip-footer,
+      .smudge-tooltip-parent-ctx .smudge-tooltip-footer {
+        margin-top: 8px;
+      }
+      .smudge-list-item-reply {
+        padding-left: 14px;
+      }
     }
 
     /* ── highlight pulse for jump-to ── */
@@ -896,70 +1082,151 @@ function closeTooltip() {
   }
 }
 
-function showTooltip(comment, smudgeEl) {
-  closeTooltip();
-
-  const tip = document.createElement('div');
-  tip.className = 'smudge-tooltip';
-
-  // Measure off-screen first to get dimensions
-  tip.style.visibility = 'hidden';
-  tip.style.left = '0';
-  tip.style.top = '0';
-
-  const isOwn = oauthSession && comment.source === 'atproto' && comment.did === oauthSession.did;
-  const deleteHtml = isOwn
-    ? `<button class="smudge-btn smudge-btn-delete" data-action="delete">remove</button>`
-    : '';
-
-  if (comment.source === 'isso') {
-    tip.innerHTML = `
-      <div class="smudge-tooltip-meta">
-        <span class="smudge-tooltip-anon">anonymous</span>
-        <span class="smudge-tooltip-sep">&middot;</span>
-        <span class="smudge-tooltip-time">${formatTime(comment.createdAt)}</span>
-      </div>
-      <div class="smudge-tooltip-text">${escapeHtml(comment.text)}</div>
-    `;
-  } else {
-    const profile = profileCache[comment.did] || {};
-    const avatarHtml = profile.avatar
-      ? `<img class="smudge-tooltip-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
+function commentMetaHtml(c) {
+  if (c.source === 'isso') {
+    const identiconHtml = c.hash
+      ? `<span class="smudge-tooltip-identicon">${generateIdenticon(c.hash, 22)}</span>`
       : '';
-    const handle = profile.handle || comment.handle || comment.did?.slice(0, 16) + '...';
-    const displayName = profile.displayName || '';
-    const nameHtml = displayName
-      ? `<strong>${escapeHtml(displayName)}</strong>`
-      : `<span class="smudge-tooltip-handle">@${escapeHtml(handle)}</span>`;
-
-    tip.innerHTML = `
-      <div class="smudge-tooltip-meta">
-        ${avatarHtml}
-        ${nameHtml}
-        <span class="smudge-tooltip-sep">&middot;</span>
-        <span class="smudge-tooltip-time">${formatTime(comment.createdAt)}</span>
-      </div>
-      <div class="smudge-tooltip-text">${escapeHtml(comment.text)}</div>
-      ${deleteHtml ? `<div class="smudge-tooltip-footer">${deleteHtml}</div>` : ''}
-    `;
+    const authorName = c.author
+      ? `<span>${escapeHtml(c.author)}</span>`
+      : `<span class="smudge-tooltip-anon">anonymous</span>`;
+    return `${identiconHtml}${authorName}<span class="smudge-tooltip-sep">&middot;</span><span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>`;
   }
+  const profile = profileCache[c.did] || {};
+  const avatarHtml = profile.avatar
+    ? `<img class="smudge-tooltip-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
+    : '';
+  const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
+  const displayName = profile.displayName || '';
+  const nameHtml = displayName
+    ? `<strong>${escapeHtml(displayName)}</strong>`
+    : `<span class="smudge-tooltip-handle">@${escapeHtml(handle)}</span>`;
+  return `${avatarHtml}${nameHtml}<span class="smudge-tooltip-sep">&middot;</span><span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>`;
+}
 
-  if (isOwn) {
-    tip.querySelector('[data-action="delete"]').addEventListener('click', async (e) => {
+function commentDeleteBtnHtml(c) {
+  if (c.source === 'atproto' && oauthSession && c.did === oauthSession.did && c.rkey) {
+    return `<button class="smudge-btn smudge-btn-delete" data-action="delete-atproto" data-did="${escapeHtml(c.did)}" data-rkey="${escapeHtml(c.rkey)}">remove</button>`;
+  }
+  if (c.source === 'isso' && issoOwnedIds.has(c.id)) {
+    return `<button class="smudge-btn smudge-btn-delete" data-action="delete-isso" data-issoid="${c.id}">remove</button>`;
+  }
+  return '';
+}
+
+function getReplies(parentComment) {
+  const key = commentKey(parentComment);
+  return comments.filter(c => getParentKey(c) === key);
+}
+
+/** Wire up all delete buttons inside a tooltip element. Optionally remove a specific DOM element on success. */
+function wireDeleteButtons(tip, onSuccess) {
+  tip.querySelectorAll('[data-action="delete-atproto"]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const btn = e.currentTarget;
+      const did = btn.dataset.did;
+      const rkey = btn.dataset.rkey;
+      const c = comments.find(x => x.did === did && x.rkey === rkey);
+      if (!c) { console.warn('[smudge] delete: comment not found', did, rkey); return; }
       btn.textContent = 'removing...';
       btn.disabled = true;
       try {
-        await deleteSmudge(comment);
+        await deleteSmudge(c);
         closeTooltip();
-        smudgeEl.remove();
+        if (onSuccess) onSuccess();
+        await loadComments();
       } catch (err) {
         console.error('[smudge] delete error:', err);
         btn.textContent = 'error';
       }
     });
+  });
+  tip.querySelectorAll('[data-action="delete-isso"]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const issoId = parseInt(btn.dataset.issoid);
+      btn.textContent = 'removing...';
+      btn.disabled = true;
+      try {
+        await deleteIssoComment(issoId);
+        issoOwnedIds.delete(issoId);
+        closeTooltip();
+        if (onSuccess) onSuccess();
+        await loadComments();
+      } catch (err) {
+        console.error('[smudge] isso delete error:', err);
+        btn.textContent = 'error';
+      }
+    });
+  });
+}
+
+function showTooltip(comment, smudgeEl) {
+  closeTooltip();
+
+  const tip = document.createElement('div');
+  tip.className = 'smudge-tooltip';
+  tip.style.visibility = 'hidden';
+  tip.style.left = '0';
+  tip.style.top = '0';
+
+  let html = '';
+
+  // If this comment is a reply, show parent context above
+  const parentKey = getParentKey(comment);
+  const parentComment = parentKey ? comments.find(c => commentKey(c) === parentKey) : null;
+  if (parentComment) {
+    html += `
+      <div class="smudge-tooltip-parent-ctx">
+        <div class="smudge-tooltip-meta">${commentMetaHtml(parentComment)}</div>
+        <div class="smudge-tooltip-text">${escapeHtml(parentComment.text)}</div>
+      </div>
+    `;
   }
+
+  // The main comment
+  const delBtn = commentDeleteBtnHtml(comment);
+  const replyBtn = `<button class="smudge-btn smudge-btn-reply" data-action="reply" data-key="${escapeHtml(commentKey(comment))}">reply</button>`;
+  html += `
+    <div class="smudge-tooltip-meta">${commentMetaHtml(comment)}</div>
+    <div class="smudge-tooltip-text">${escapeHtml(comment.text)}</div>
+    <div class="smudge-tooltip-footer">${replyBtn}${delBtn}</div>
+  `;
+
+  // Show replies to this comment (threaded below)
+  const replies = getReplies(comment);
+  if (replies.length > 0) {
+    html += `<div class="smudge-tooltip-thread">`;
+    for (let i = 0; i < replies.length; i++) {
+      const r = replies[i];
+      const rDelBtn = commentDeleteBtnHtml(r);
+      const rReplyBtn = `<button class="smudge-btn smudge-btn-reply" data-action="reply" data-key="${escapeHtml(commentKey(r))}">reply</button>`;
+      html += `
+        <div class="smudge-tooltip-thread-item">
+          <div class="smudge-tooltip-meta">${commentMetaHtml(r)}</div>
+          <div class="smudge-tooltip-text">${escapeHtml(r.text)}</div>
+          <div class="smudge-tooltip-footer">${rReplyBtn}${rDelBtn}</div>
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+
+  tip.innerHTML = html;
+
+  // Wire up all reply buttons
+  tip.querySelectorAll('[data-action="reply"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.key;
+      const target = comments.find(c => commentKey(c) === key) || comment;
+      closeTooltip();
+      openCompose(target.positionX || 0, target.positionY || 0, key);
+    });
+  });
+
+  // Wire up all delete buttons (shared handler)
+  wireDeleteButtons(tip, () => smudgeEl.remove());
 
   // Position tooltip in the layer near the smudge
   layer.appendChild(tip);
@@ -1025,10 +1292,15 @@ function scaleMobilePopup(popup) {
   popup.querySelectorAll('.smudge-nudge').forEach(el => {
     el.style.fontSize = fs + 'px';
   });
-  popup.querySelectorAll('input[type="text"]').forEach(el => {
+  popup.querySelectorAll('input[type="text"], input[type="email"]').forEach(el => {
     el.style.fontSize = fs + 'px';
     el.style.padding = Math.round(10 * scale) + 'px';
     el.style.borderRadius = Math.round(8 * scale) + 'px';
+  });
+  popup.querySelectorAll('.smudge-compose-reply-context').forEach(el => {
+    el.style.fontSize = Math.round(14 * scale) + 'px';
+    el.style.padding = `${Math.round(8 * scale)}px ${Math.round(10 * scale)}px`;
+    el.style.marginBottom = Math.round(10 * scale) + 'px';
   });
   popup.querySelectorAll('.smudge-signin-hint').forEach(el => {
     el.style.fontSize = Math.round(13 * scale) + 'px';
@@ -1039,7 +1311,7 @@ function scaleMobilePopup(popup) {
   });
 }
 
-function openCompose(containerX, containerY) {
+function openCompose(containerX, containerY, replyTo = null) {
   closeCompose();
 
   const popup = document.createElement('div');
@@ -1047,9 +1319,9 @@ function openCompose(containerX, containerY) {
 
   // Decide what to show based on auth state
   if (oauthSession) {
-    showComposeForm(popup, containerX, containerY, 'atproto');
+    showComposeForm(popup, containerX, containerY, 'atproto', replyTo);
   } else {
-    showAuthChoice(popup, containerX, containerY);
+    showAuthChoice(popup, containerX, containerY, replyTo);
   }
 
   if (isMobile && window.visualViewport) {
@@ -1086,7 +1358,7 @@ function openCompose(containerX, containerY) {
   activeCompose = popup;
 }
 
-function showAuthChoice(popup, x, y) {
+function showAuthChoice(popup, x, y, replyTo = null) {
   const hasIsso = !!CONFIG.isso;
 
   popup.innerHTML = `
@@ -1109,14 +1381,14 @@ function showAuthChoice(popup, x, y) {
 
   if (hasIsso) {
     popup.querySelector('[data-action="anon"]').addEventListener('click', () => {
-      showNudge(popup, x, y);
+      showNudge(popup, x, y, replyTo);
     });
   }
 
   popup.querySelector('[data-action="cancel"]').addEventListener('click', closeCompose);
 }
 
-function showNudge(popup, x, y) {
+function showNudge(popup, x, y, replyTo = null) {
   popup.innerHTML = `
     <div class="smudge-nudge">
       with an atmosphere account, your words are yours to keep forever — stored in your own data vault, not mine. and you give me nothing. still want to go anonymous?
@@ -1134,17 +1406,29 @@ function showNudge(popup, x, y) {
   });
 
   popup.querySelector('[data-action="stay-anon"]').addEventListener('click', () => {
-    showComposeForm(popup, x, y, 'isso');
+    showComposeForm(popup, x, y, 'isso', replyTo);
   });
 }
 
-function showComposeForm(popup, x, y, mode) {
+function showComposeForm(popup, x, y, mode, replyTo = null) {
   const label = mode === 'atproto'
     ? `leaving mark as @${oauthSession?.handle || '...'}`
     : 'anonymous mark';
 
+  const replyParent = replyTo ? getReplyParent(replyTo) : null;
+  const replyCtxHtml = replyParent ? replyContextHtml(replyParent) : '';
+
+  const issoFields = mode === 'isso' ? `
+    <div class="smudge-compose-identity">
+      <input type="text" class="smudge-compose-name" placeholder="name (optional)" maxlength="254" autocomplete="off">
+      <input type="email" class="smudge-compose-email" placeholder="email (optional, for icon)" maxlength="254" autocomplete="off">
+    </div>
+  ` : '';
+
   popup.innerHTML = `
     <h3>${escapeHtml(label)}</h3>
+    ${replyCtxHtml}
+    ${issoFields}
     <textarea placeholder="leave your mark..." maxlength="3000" autofocus></textarea>
     <div class="smudge-compose-actions">
       <button class="smudge-btn smudge-btn-secondary" data-action="cancel">cancel</button>
@@ -1156,6 +1440,14 @@ function showComposeForm(popup, x, y, mode) {
 
   const textarea = popup.querySelector('textarea');
   const submitBtn = popup.querySelector('[data-action="submit"]');
+  const nameInput = popup.querySelector('.smudge-compose-name');
+  const emailInput = popup.querySelector('.smudge-compose-email');
+
+  // Restore saved name/email from localStorage
+  if (nameInput) {
+    nameInput.value = localStorage.getItem('smudge-anon-name') || '';
+    emailInput.value = localStorage.getItem('smudge-anon-email') || '';
+  }
 
   requestAnimationFrame(() => textarea.focus());
 
@@ -1168,9 +1460,17 @@ function showComposeForm(popup, x, y, mode) {
 
     try {
       if (mode === 'atproto') {
-        await submitAtprotoComment(text, x, y);
+        await submitAtprotoComment(text, x, y, replyTo);
       } else {
-        await submitIssoComment(text, x, y);
+        const name = nameInput?.value.trim() || '';
+        const email = emailInput?.value.trim() || '';
+        // Save for next time
+        if (name) localStorage.setItem('smudge-anon-name', name);
+        if (email) localStorage.setItem('smudge-anon-email', email);
+        // For Isso, extract parent ID if replying to an Isso comment
+        const issoParent = replyTo?.startsWith('isso:') ? parseInt(replyTo.split(':')[1]) : null;
+        const issoResult = await submitIssoComment(text, x, y, name, email, issoParent);
+        if (issoResult?.id) issoOwnedIds.add(issoResult.id);
       }
       closeCompose();
       await loadComments(); // refresh
@@ -1277,9 +1577,73 @@ function setupListPanelPullDismiss() {
   }, { passive: true });
 }
 
+function listItemMetaHtml(c) {
+  if (c.source === 'isso') {
+    const identiconHtml = c.hash
+      ? `<span class="smudge-list-item-identicon">${generateIdenticon(c.hash, 22)}</span>`
+      : '';
+    const authorName = c.author
+      ? escapeHtml(c.author)
+      : '<span style="font-style:italic;">anonymous</span>';
+    return `
+      ${identiconHtml}
+      <span style="color:#999;">${authorName}</span>
+      <span style="color:#555;">&middot;</span>
+      <span style="color:#666;">${formatTime(c.createdAt)}</span>
+    `;
+  }
+  const profile = profileCache[c.did] || {};
+  const avatarHtml = profile.avatar
+    ? `<img class="smudge-list-item-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
+    : '';
+  const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
+  const displayName = profile.displayName || '';
+  const nameHtml = displayName
+    ? `<strong>${escapeHtml(displayName)}</strong>`
+    : `<span style="color:#aaa;">@${escapeHtml(handle)}</span>`;
+  return `
+    ${avatarHtml} ${nameHtml}
+    <span style="color:#555;">&middot;</span>
+    <span style="color:#666;">${formatTime(c.createdAt)}</span>
+  `;
+}
+
 function populateListPanel() {
-  // Sort comments top-to-bottom by positionY
-  const sorted = [...comments].sort((a, b) => (a.positionY || 0) - (b.positionY || 0));
+  // Build threading: parent → children
+  const childrenOf = {}; // parentKey → [comment, ...]
+  const topLevel = [];
+  const replySet = new Set();
+
+  for (const c of comments) {
+    const pk = getParentKey(c);
+    if (pk) {
+      if (!childrenOf[pk]) childrenOf[pk] = [];
+      childrenOf[pk].push(c);
+      replySet.add(c);
+    }
+  }
+  for (const c of comments) {
+    if (!replySet.has(c)) topLevel.push(c);
+  }
+
+  // Sort top-level by positionY, replies by createdAt
+  topLevel.sort((a, b) => (a.positionY || 0) - (b.positionY || 0));
+  for (const arr of Object.values(childrenOf)) {
+    arr.sort((a, b) => {
+      const ta = typeof a.createdAt === 'number' ? a.createdAt : new Date(a.createdAt).getTime() / 1000;
+      const tb = typeof b.createdAt === 'number' ? b.createdAt : new Date(b.createdAt).getTime() / 1000;
+      return ta - tb;
+    });
+  }
+
+  // Flatten into ordered list with depth info
+  const flat = [];
+  function addWithReplies(c, depth) {
+    flat.push({ comment: c, depth });
+    const replies = childrenOf[commentKey(c)] || [];
+    for (const r of replies) addWithReplies(r, depth + 1);
+  }
+  for (const c of topLevel) addWithReplies(c, 0);
 
   let html = `
     <div class="smudge-list-header">
@@ -1289,40 +1653,18 @@ function populateListPanel() {
     <div class="smudge-list-items">
   `;
 
-  if (sorted.length === 0) {
+  if (flat.length === 0) {
     html += `<div class="smudge-list-empty">no marks yet</div>`;
   }
 
-  for (let i = 0; i < sorted.length; i++) {
-    const c = sorted[i];
-    const profile = profileCache[c.did] || {};
-
-    let metaHtml;
-    if (c.source === 'isso') {
-      metaHtml = `
-        <span style="font-style:italic; color:#777;">anonymous</span>
-        <span style="color:#555;">&middot;</span>
-        <span style="color:#666;">${formatTime(c.createdAt)}</span>
-      `;
-    } else {
-      const avatarHtml = profile.avatar
-        ? `<img class="smudge-list-item-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
-        : '';
-      const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
-      const displayName = profile.displayName || '';
-      const nameHtml = displayName
-        ? `<strong>${escapeHtml(displayName)}</strong>`
-        : `<span style="color:#aaa;">@${escapeHtml(handle)}</span>`;
-      metaHtml = `
-        ${avatarHtml} ${nameHtml}
-        <span style="color:#555;">&middot;</span>
-        <span style="color:#666;">${formatTime(c.createdAt)}</span>
-      `;
-    }
+  for (let i = 0; i < flat.length; i++) {
+    const { comment: c, depth } = flat[i];
+    const indent = Math.min(depth, 3) * 16;
+    const replyClass = depth > 0 ? ' smudge-list-item-reply' : '';
 
     html += `
-      <div class="smudge-list-item" data-idx="${i}">
-        <div class="smudge-list-item-meta">${metaHtml}</div>
+      <div class="smudge-list-item${replyClass}" data-idx="${i}" style="margin-left:${indent}px;">
+        <div class="smudge-list-item-meta">${listItemMetaHtml(c)}</div>
         <div class="smudge-list-item-text">${escapeHtml(c.text)}</div>
         <span class="smudge-list-item-jump">jump to &rarr;</span>
       </div>
@@ -1339,7 +1681,7 @@ function populateListPanel() {
   listPanel.querySelectorAll('.smudge-list-item').forEach(item => {
     item.addEventListener('click', () => {
       const idx = parseInt(item.dataset.idx, 10);
-      const c = sorted[idx];
+      const c = flat[idx].comment;
       if (isMobile) closeListPanel();
       jumpToComment(c);
     });
@@ -1350,6 +1692,46 @@ function commentKey(c) {
   if (c.did && c.rkey) return `atproto:${c.did}:${c.rkey}`;
   if (c.source === 'isso' && c.id != null) return `isso:${c.id}`;
   return `pos:${c.positionX}:${c.positionY}:${c.text}`;
+}
+
+function getParentKey(c) {
+  if (c.replyTo) return c.replyTo;
+  if (c.source === 'isso' && c.parent) return `isso:${c.parent}`;
+  return null;
+}
+
+function getReplyParent(replyToKey) {
+  return comments.find(c => commentKey(c) === replyToKey) || null;
+}
+
+function replyContextHtml(parent) {
+  if (!parent) return '';
+  let authorHtml;
+  if (parent.source === 'isso') {
+    const identiconHtml = parent.hash
+      ? `<span class="smudge-tooltip-identicon" style="display:inline-flex;vertical-align:middle;margin-right:4px;">${generateIdenticon(parent.hash, 16)}</span>`
+      : '';
+    const name = parent.author ? escapeHtml(parent.author) : 'anonymous';
+    authorHtml = `${identiconHtml}<strong>${name}</strong>`;
+  } else {
+    const profile = profileCache[parent.did] || {};
+    const avatarHtml = profile.avatar
+      ? `<img src="${escapeHtml(profile.avatar)}" style="width:16px;height:16px;border-radius:50%;vertical-align:middle;margin-right:4px;" alt="">`
+      : '';
+    const handle = profile.handle || parent.handle || parent.did?.slice(0, 16) + '...';
+    const displayName = profile.displayName || '';
+    const name = displayName || ('@' + handle);
+    authorHtml = `${avatarHtml}<strong>${escapeHtml(name)}</strong>`;
+  }
+  const truncated = parent.text.length > 120
+    ? escapeHtml(parent.text.slice(0, 120)) + '...'
+    : escapeHtml(parent.text);
+  return `
+    <div class="smudge-compose-reply-context">
+      <div class="smudge-reply-author">replying to ${authorHtml}</div>
+      <div class="smudge-reply-quote">${truncated}</div>
+    </div>
+  `;
 }
 
 function jumpToComment(comment) {
@@ -1408,7 +1790,7 @@ function clusterComments(commentList, cellSize = 150) {
 }
 
 // ── ATProto comment submission ─────────────────────────────────────────
-async function submitAtprotoComment(text, posX, posY) {
+async function submitAtprotoComment(text, posX, posY, replyTo = null) {
   console.log('[smudge] oauthAgent:', oauthAgent, 'has .com?', !!oauthAgent?.com, 'AgentClass?', !!AgentClass);
   if (!oauthAgent) throw new Error('not signed in');
 
@@ -1423,6 +1805,7 @@ async function submitAtprotoComment(text, posX, posY) {
     positionY: Math.round(posY),
     createdAt: now,
   };
+  if (replyTo) record.replyTo = replyTo;
 
   // Write to user's PDS
   let res;
@@ -1443,19 +1826,22 @@ async function submitAtprotoComment(text, posX, posY) {
   const rkey = res.data.uri.split('/').pop();
 
   // Index on our backend
+  const indexBody = {
+    did: oauthSession.did,
+    rkey,
+    page: CONFIG.page,
+    text,
+    positionX: Math.round(posX),
+    positionY: Math.round(posY),
+    createdAt: now,
+    handle: oauthSession.handle,
+  };
+  if (replyTo) indexBody.replyTo = replyTo;
+
   await fetch(`${CONFIG.api}/api/index`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      did: oauthSession.did,
-      rkey,
-      page: CONFIG.page,
-      text,
-      positionX: Math.round(posX),
-      positionY: Math.round(posY),
-      createdAt: now,
-      handle: oauthSession.handle,
-    }),
+    body: JSON.stringify(indexBody),
   });
 }
 
@@ -1491,24 +1877,39 @@ async function deleteSmudge(comment) {
 }
 
 // ── Isso comment submission ────────────────────────────────────────────
-async function submitIssoComment(text, posX, posY) {
+async function submitIssoComment(text, posX, posY, author = '', email = '', parent = null) {
   const issoUri = CONFIG.issoUri || `/${CONFIG.page}`;
 
   const issoRes = await fetch(`${CONFIG.isso}/new?uri=${encodeURIComponent(issoUri)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({
       text,
-      author: '',
-      email: '',
+      author,
+      email,
       website: `https://smudge.pos/${Math.round(posX)}/${Math.round(posY)}`,
-      parent: null,
+      parent,
     }),
   });
   if (!issoRes.ok) {
     const body = await issoRes.text();
     console.error('[smudge] isso error:', issoRes.status, body);
     throw new Error(`Isso ${issoRes.status}: ${body}`);
+  }
+  const data = await issoRes.json();
+  return data; // includes id, hash, author, etc.
+}
+
+async function deleteIssoComment(commentId) {
+  const issoRes = await fetch(`${CONFIG.isso}/id/${commentId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!issoRes.ok) {
+    const body = await issoRes.text();
+    console.error('[smudge] isso delete error:', issoRes.status, body);
+    throw new Error(`Isso delete ${issoRes.status}: ${body}`);
   }
 }
 
@@ -1904,48 +2305,81 @@ function showClusterTooltip(cluster, clusterEl) {
   tip.style.visibility = 'hidden';
   tip.style.left = '0';
   tip.style.top = '0';
-  tip.style.maxHeight = '300px';
-  tip.style.overflowY = 'auto';
-
-  let html = '';
+  // Build threaded view of cluster: parents first, replies indented
+  const clusterKeys = new Set(cluster.map(c => commentKey(c)));
+  const childrenOf = {};
+  const topLevel = [];
   for (const c of cluster) {
-    const profile = profileCache[c.did] || {};
-    if (c.source === 'isso') {
-      html += `
-        <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.06);">
-          <div class="smudge-tooltip-meta">
-            <span class="smudge-tooltip-anon">anonymous</span>
-            <span class="smudge-tooltip-sep">&middot;</span>
-            <span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>
-          </div>
-          <div class="smudge-tooltip-text">${escapeHtml(c.text)}</div>
-        </div>`;
+    const pk = getParentKey(c);
+    if (pk && clusterKeys.has(pk)) {
+      if (!childrenOf[pk]) childrenOf[pk] = [];
+      childrenOf[pk].push(c);
     } else {
-      const avatarHtml = profile.avatar
-        ? `<img class="smudge-tooltip-avatar" src="${escapeHtml(profile.avatar)}" alt="">`
-        : '';
-      const handle = profile.handle || c.handle || c.did?.slice(0, 16) + '...';
-      const displayName = profile.displayName || '';
-      const nameHtml = displayName
-        ? `<strong>${escapeHtml(displayName)}</strong>`
-        : `<span class="smudge-tooltip-handle">@${escapeHtml(handle)}</span>`;
-      html += `
-        <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.06);">
-          <div class="smudge-tooltip-meta">
-            ${avatarHtml} ${nameHtml}
-            <span class="smudge-tooltip-sep">&middot;</span>
-            <span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>
-          </div>
-          <div class="smudge-tooltip-text">${escapeHtml(c.text)}</div>
-        </div>`;
+      topLevel.push(c);
     }
   }
-  // Remove last border
+
+  // Also gather replies from outside the cluster
+  for (const c of comments) {
+    if (clusterKeys.has(commentKey(c))) continue;
+    const pk = getParentKey(c);
+    if (pk && clusterKeys.has(pk)) {
+      if (!childrenOf[pk]) childrenOf[pk] = [];
+      childrenOf[pk].push(c);
+    }
+  }
+
+  // All comments we'll show (for wiring up handlers)
+  const allShown = [];
+
+  let html = '';
+  function renderComment(c, isThread) {
+    const idx = allShown.length;
+    allShown.push(c);
+    const delBtn = commentDeleteBtnHtml(c);
+    const replyBtn = `<button class="smudge-btn smudge-btn-reply" data-action="reply" data-cidx="${idx}">reply</button>`;
+    const wrapClass = isThread ? 'smudge-tooltip-thread-item' : 'smudge-cluster-comment';
+    const borderStyle = isThread ? '' : 'border-bottom: 1px solid rgba(255,255,255,0.06);';
+    html += `
+      <div class="${wrapClass}" style="margin-bottom: ${isThread ? '6' : '10'}px; padding-bottom: ${isThread ? '0' : '8'}px; ${borderStyle}">
+        <div class="smudge-tooltip-meta">${commentMetaHtml(c)}</div>
+        <div class="smudge-tooltip-text">${escapeHtml(c.text)}</div>
+        <div class="smudge-tooltip-footer">${replyBtn}${delBtn}</div>
+      </div>`;
+  }
+
+  for (const c of topLevel) {
+    renderComment(c, false);
+    const replies = childrenOf[commentKey(c)] || [];
+    for (const r of replies) renderComment(r, true);
+  }
+
+  // Remove last border on non-thread items
   tip.innerHTML = html;
-  const lastChild = tip.querySelector('div:last-child');
-  if (lastChild) lastChild.style.borderBottom = 'none';
+  const lastTop = tip.querySelector('.smudge-cluster-comment:last-of-type');
+  if (lastTop) lastTop.style.borderBottom = 'none';
+
+  // Wire up all reply buttons
+  tip.querySelectorAll('[data-action="reply"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const c = allShown[parseInt(btn.dataset.cidx)];
+      closeTooltip();
+      openCompose(c.positionX || 0, c.positionY || 0, commentKey(c));
+    });
+  });
+
+  // Wire up all delete buttons (shared handler)
+  wireDeleteButtons(tip);
 
   layer.appendChild(tip);
+
+  // Cap height before measuring — so positioning uses the capped size.
+  // But defer overflow:auto until after positioning to avoid iOS touch issues.
+  const maxH = 400;
+  const needsScroll = tip.scrollHeight > maxH;
+  if (needsScroll) tip.style.maxHeight = maxH + 'px';
+
   const tipW = tip.offsetWidth;
   const tipH = tip.offsetHeight;
   const smLeft = parseFloat(clusterEl.style.left) || 0;
@@ -1963,6 +2397,11 @@ function showClusterTooltip(cluster, clusterEl) {
   tip.style.left = x + 'px';
   tip.style.top = y + 'px';
   tip.style.visibility = 'visible';
+
+  // Enable scrolling only after positioning — iOS Safari can swallow
+  // click events inside overflow:auto containers
+  if (needsScroll) tip.style.overflowY = 'auto';
+
   activeTooltip = tip;
 }
 
@@ -2011,6 +2450,34 @@ function hashStr(s) {
     h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   }
   return Math.abs(h);
+}
+
+// ── identicon generation (for Isso comments with hash) ─────────────────
+const IDENTICON_COLORS = ['#9abf88','#5698c4','#e279a3','#9163b6','#be5168','#f19670','#e4bf80','#447c69'];
+
+function generateIdenticon(hash, size = 28) {
+  // Isso-style 5x5 symmetric identicon from hash string
+  const hex = (hash || '').slice(-16);
+  let num = 0;
+  for (let i = 0; i < hex.length; i++) {
+    num = (num * 16 + parseInt(hex[i], 16)) || 0;
+  }
+  const bits = (num % (1 << 18)).toString(2).padStart(18, '0');
+  const fg = IDENTICON_COLORS[num % IDENTICON_COLORS.length];
+  const cell = size / 5;
+  let rects = '';
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 3; col++) {
+      const idx = row * 3 + col;
+      if (bits[idx] === '1') {
+        rects += `<rect x="${col * cell}" y="${row * cell}" width="${cell}" height="${cell}" fill="${fg}"/>`;
+        if (col < 2) {
+          rects += `<rect x="${(4 - col) * cell}" y="${row * cell}" width="${cell}" height="${cell}" fill="${fg}"/>`;
+        }
+      }
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#2a2a2a" rx="3"/>${rects}</svg>`;
 }
 
 // ── zoom compensation (mobile) ──────────────────────────────────────────
