@@ -37,6 +37,7 @@ let layerVisible = false;
 let comments = [];
 const profileCache = {};
 let anonBackend = null; // pluggable anonymous comment backend ({ submit, remove, canRemove, getReplyParent })
+let _refreshZoomLayout = null; // called after status visibility changes
 // Detect touch-primary devices (phones/tablets) via pointer capability, not screen size
 const isMobile = window.matchMedia('(pointer: coarse)').matches;
 
@@ -126,16 +127,16 @@ function injectStyles() {
     }
     .smudge .smudge-shimmer {
       position: absolute;
-      inset: 0;
+      inset: -4px;
       pointer-events: none;
       border-radius: 50%;
-      filter: blur(12px);
+      filter: blur(8px);
       mix-blend-mode: screen;
-      opacity: 0.5;
+      opacity: 0.7;
       transition: opacity 0.5s ease;
     }
     .smudge:hover .smudge-shimmer {
-      opacity: 0.85;
+      opacity: 0.95;
     }
     .smudge.anon-smudge {
       filter: saturate(0.7) brightness(0.85);
@@ -573,11 +574,14 @@ function injectStyles() {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
       padding: clamp(6px, 0.6vw, 14px) clamp(10px, 0.9vw, 20px);
+      border: none;
       border-radius: clamp(6px, 0.6vw, 14px);
       max-width: clamp(180px, 15vw, 360px);
       pointer-events: auto;
       cursor: pointer;
       display: none;
+      text-align: left;
+      line-height: inherit;
     }
     .smudge-status.visible { display: block; }
     @media (pointer: coarse) {
@@ -912,7 +916,7 @@ function createDOM() {
   uiOverlay.appendChild(toggleBtn);
 
   // Status indicator
-  statusEl = document.createElement('div');
+  statusEl = document.createElement('button');
   statusEl.className = 'smudge-status';
   statusEl.addEventListener('click', handleSignIn);
   uiOverlay.appendChild(statusEl);
@@ -969,13 +973,18 @@ function updateStatus() {
     statusEl.classList.add('visible');
     clearTimeout(statusEl._fadeTimer);
     statusEl._fadeTimer = setTimeout(() => {
-      if (oauthSession) statusEl.textContent = 'log out';
+      if (oauthSession) {
+        statusEl.textContent = 'log out';
+        if (_refreshZoomLayout) _refreshZoomLayout();
+      }
     }, 2000);
   } else {
     statusEl.textContent = 'sign in';
     statusEl.title = 'sign in to leave marks';
     statusEl.classList.add('visible');
   }
+  // Reposition after text/visibility change so width measurement is fresh
+  if (_refreshZoomLayout) _refreshZoomLayout();
 }
 
 // ── long-press detection ───────────────────────────────────────────────
@@ -2166,6 +2175,7 @@ async function loadComments() {
     }
 
     renderSmudges();
+    if (listPanel.classList.contains('open')) populateListPanel();
   } catch (err) {
     console.warn('[smudge] failed to load comments:', err.message);
   }
@@ -2214,11 +2224,11 @@ function createSmudgeSVG(seed, w, h, rotation) {
   const rand = seededRandom(seed);
   const uid = 's' + (smudgeCounter++);
 
-  const turbBase = 0.012 + rand() * 0.015;
-  const turbFreq = `${turbBase.toFixed(4)} ${(turbBase * 0.7 + rand() * 0.008).toFixed(4)}`;
+  const turbBase = 0.01 + rand() * 0.012;
+  const turbFreq = `${turbBase.toFixed(4)} ${(turbBase * 0.7 + rand() * 0.006).toFixed(4)}`;
   const turbSeed = Math.floor(rand() * 9999);
-  const octaves = 3 + Math.floor(rand() * 3);
-  const dispScale = 60 + rand() * 80;
+  const octaves = 3 + Math.floor(rand() * 2);
+  const dispScale = 40 + rand() * 50;
   const hue = Math.floor(Math.random() * 360);
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2232,29 +2242,30 @@ function createSmudgeSVG(seed, w, h, rotation) {
       <filter id="f-${uid}" x="-30%" y="-30%" width="160%" height="160%">
         <feTurbulence type="fractalNoise" baseFrequency="${turbFreq}" numOctaves="${octaves}" seed="${turbSeed}" result="noise"/>
         <feDisplacementMap in="SourceGraphic" in2="noise" scale="${dispScale}" xChannelSelector="R" yChannelSelector="G"/>
-        <feGaussianBlur stdDeviation="2"/>
+        <feGaussianBlur stdDeviation="1.5"/>
       </filter>
       <linearGradient id="g-${uid}" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%"   stop-color="hsl(${hue}, 70%, 65%)"       stop-opacity="0.7"/>
-        <stop offset="20%"  stop-color="hsl(${(hue+50)%360}, 75%, 60%)"  stop-opacity="0.8"/>
-        <stop offset="40%"  stop-color="hsl(${(hue+120)%360}, 65%, 55%)" stop-opacity="0.75"/>
-        <stop offset="60%"  stop-color="hsl(${(hue+200)%360}, 70%, 60%)" stop-opacity="0.8"/>
-        <stop offset="80%"  stop-color="hsl(${(hue+280)%360}, 75%, 65%)" stop-opacity="0.7"/>
-        <stop offset="100%" stop-color="hsl(${(hue+340)%360}, 65%, 60%)" stop-opacity="0.6"/>
+        <stop offset="0%"   stop-color="hsl(${hue}, 80%, 68%)"       stop-opacity="0.9"/>
+        <stop offset="20%"  stop-color="hsl(${(hue+50)%360}, 85%, 62%)"  stop-opacity="0.95"/>
+        <stop offset="40%"  stop-color="hsl(${(hue+120)%360}, 75%, 58%)" stop-opacity="0.9"/>
+        <stop offset="60%"  stop-color="hsl(${(hue+200)%360}, 80%, 62%)" stop-opacity="0.95"/>
+        <stop offset="80%"  stop-color="hsl(${(hue+280)%360}, 85%, 68%)" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="hsl(${(hue+340)%360}, 75%, 62%)" stop-opacity="0.85"/>
       </linearGradient>
       <radialGradient id="m-${uid}" cx="50%" cy="50%" r="50%">
         <stop offset="0%" stop-color="white" stop-opacity="1"/>
-        <stop offset="60%" stop-color="white" stop-opacity="0.8"/>
+        <stop offset="50%" stop-color="white" stop-opacity="0.9"/>
+        <stop offset="80%" stop-color="white" stop-opacity="0.5"/>
         <stop offset="100%" stop-color="white" stop-opacity="0"/>
       </radialGradient>
     </defs>
     <g filter="url(#f-${uid})">
-      <ellipse cx="${w/2}" cy="${h/2}" rx="${w*0.38}" ry="${h*0.38}"
+      <ellipse cx="${w/2}" cy="${h/2}" rx="${w*0.42}" ry="${h*0.42}"
         fill="url(#g-${uid})" style="mix-blend-mode:screen"/>
-      <ellipse cx="${w/2 + w*0.05}" cy="${h/2 - h*0.03}" rx="${w*0.3}" ry="${h*0.28}"
-        fill="url(#g-${uid})" opacity="0.6" style="mix-blend-mode:overlay"/>
-      <ellipse cx="${w/2 - w*0.08}" cy="${h/2 + h*0.05}" rx="${w*0.35}" ry="${h*0.15}"
-        fill="url(#g-${uid})" opacity="0.4" style="mix-blend-mode:color-dodge"/>
+      <ellipse cx="${w/2 + w*0.04}" cy="${h/2 - h*0.02}" rx="${w*0.34}" ry="${h*0.32}"
+        fill="url(#g-${uid})" opacity="0.7" style="mix-blend-mode:overlay"/>
+      <ellipse cx="${w/2 - w*0.06}" cy="${h/2 + h*0.04}" rx="${w*0.38}" ry="${h*0.18}"
+        fill="url(#g-${uid})" opacity="0.5" style="mix-blend-mode:color-dodge"/>
     </g>
     <ellipse cx="${w/2}" cy="${h/2}" rx="${w/2}" ry="${h/2}"
       fill="url(#m-${uid})" style="mix-blend-mode:destination-in"/>
@@ -2270,6 +2281,7 @@ function createSingleSmudge(comment) {
   const sizeBase = comment.source !== 'atproto' ? 0.7 : 1;
   const w = Math.round((50 + rand() * 30) * sizeBase);
   const h = Math.round((30 + rand() * 20) * sizeBase);
+  // size stays the same — visibility comes from richer color/opacity
   const rotation = Math.round(rand() * 60 - 30);
 
   const smudge = document.createElement('div');
@@ -2555,60 +2567,66 @@ function setupZoomCompensation() {
 
   const screenW = window.screen.width || 375;
 
-  // On iOS Safari, position:fixed is relative to the LAYOUT viewport,
-  // not the visual viewport. When pinch-zoomed, we must manually
-  // reposition buttons to track what the user actually sees.
+  // Use transform: translate3d for GPU-composited positioning (no layout thrash).
+  // Set base position to fixed 0,0 once, then move via transform on each frame.
+  for (const el of [toggleBtn, listBtn, statusEl]) {
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+    el.style.willChange = 'transform';
+  }
+
+  let rafId = 0;
+
   function update() {
-    const scale = vv.width / screenW;
-    // Cap sizes so they never exceed 12% of the smaller viewport dimension
-    const maxSize = Math.min(vv.width, vv.height) * 0.12;
-    const margin = Math.min(Math.round(16 * scale), maxSize * 0.4);
-    const btnSize = Math.min(Math.round(48 * scale), maxSize);
-    const listBtnSize = Math.min(Math.round(40 * scale), maxSize * 0.85);
+    if (rafId) return; // already scheduled
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      const scale = vv.width / screenW;
+      const maxSize = Math.min(vv.width, vv.height) * 0.12;
+      const margin = Math.min(Math.round(16 * scale), maxSize * 0.4);
+      const btnSize = Math.min(Math.round(48 * scale), maxSize);
+      const listBtnSize = Math.min(Math.round(40 * scale), maxSize * 0.85);
 
-    // Position toggle button at bottom-right of VISUAL viewport
-    toggleBtn.style.position = 'fixed';
-    toggleBtn.style.bottom = 'auto';
-    toggleBtn.style.right = 'auto';
-    toggleBtn.style.left = (vv.offsetLeft + vv.width - btnSize - margin) + 'px';
-    toggleBtn.style.top = (vv.offsetTop + vv.height - btnSize - margin) + 'px';
-    toggleBtn.style.width = btnSize + 'px';
-    toggleBtn.style.height = btnSize + 'px';
-    toggleBtn.style.fontSize = Math.round(20 * scale) + 'px';
+      // Toggle button — bottom-right of visual viewport
+      const toggleX = vv.offsetLeft + vv.width - btnSize - margin;
+      const toggleY = vv.offsetTop + vv.height - btnSize - margin;
+      toggleBtn.style.transform = `translate3d(${toggleX}px, ${toggleY}px, 0)`;
+      toggleBtn.style.width = btnSize + 'px';
+      toggleBtn.style.height = btnSize + 'px';
+      toggleBtn.style.fontSize = Math.round(20 * scale) + 'px';
 
-    // Position list button to the left of toggle
-    listBtn.style.position = 'fixed';
-    listBtn.style.bottom = 'auto';
-    listBtn.style.right = 'auto';
-    listBtn.style.left = (vv.offsetLeft + vv.width - btnSize - margin - listBtnSize - Math.round(8 * scale)) + 'px';
-    listBtn.style.top = (vv.offsetTop + vv.height - listBtnSize - margin + Math.round((btnSize - listBtnSize) / 2)) + 'px';
-    listBtn.style.width = listBtnSize + 'px';
-    listBtn.style.height = listBtnSize + 'px';
+      // List button — left of toggle
+      const listX = toggleX - listBtnSize - Math.round(8 * scale);
+      const listY = vv.offsetTop + vv.height - listBtnSize - margin + Math.round((btnSize - listBtnSize) / 2);
+      listBtn.style.transform = `translate3d(${listX}px, ${listY}px, 0)`;
+      listBtn.style.width = listBtnSize + 'px';
+      listBtn.style.height = listBtnSize + 'px';
 
-    // Position status above toggle, right-aligned with toggle's right edge
-    const toggleTop = vv.offsetTop + vv.height - btnSize - margin;
-    const fs = Math.min(Math.round(13 * scale), btnSize * 0.3);
-    const padV = Math.min(Math.round(8 * scale), btnSize * 0.16);
-    const padH = Math.min(Math.round(12 * scale), btnSize * 0.25);
-    statusEl.style.position = 'fixed';
-    statusEl.style.bottom = 'auto';
-    statusEl.style.left = 'auto';
-    statusEl.style.fontSize = fs + 'px';
-    statusEl.style.padding = `${padV}px ${padH}px`;
-    statusEl.style.borderRadius = Math.round(20 * scale) + 'px';
-    statusEl.style.whiteSpace = 'nowrap';
-    statusEl.style.overflow = 'visible';
-    statusEl.style.textOverflow = 'clip';
-    statusEl.style.maxWidth = 'none';
-    statusEl.style.top = (toggleTop - padV * 2 - fs - Math.round(6 * scale)) + 'px';
-    // Right-align with toggle: compute distance from right edge of layout viewport
-    const layoutW = document.documentElement.clientWidth;
-    const toggleRightEdge = vv.offsetLeft + vv.width - margin;
-    statusEl.style.right = (layoutW - toggleRightEdge) + 'px';
+      // Status — above toggle, right-aligned with toggle's right edge
+      const fs = Math.min(Math.round(13 * scale), btnSize * 0.3);
+      const padV = Math.min(Math.round(8 * scale), btnSize * 0.16);
+      const padH = Math.min(Math.round(12 * scale), btnSize * 0.25);
+      statusEl.style.fontSize = fs + 'px';
+      statusEl.style.padding = `${padV}px ${padH}px`;
+      statusEl.style.borderRadius = Math.round(20 * scale) + 'px';
+      statusEl.style.whiteSpace = 'nowrap';
+      statusEl.style.overflow = 'visible';
+      statusEl.style.textOverflow = 'clip';
+      statusEl.style.maxWidth = 'none';
+      // Measure width after styling is applied, then right-align with toggle
+      const statusW = statusEl.offsetWidth || 80;
+      const statusX = toggleX + btnSize - statusW;
+      const statusY = toggleY - padV * 2 - fs - Math.round(6 * scale);
+      statusEl.style.transform = `translate3d(${statusX}px, ${statusY}px, 0)`;
+    });
   }
 
   vv.addEventListener('resize', update);
   vv.addEventListener('scroll', update);
+  _refreshZoomLayout = update;
   update();
 }
 
