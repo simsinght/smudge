@@ -69,7 +69,7 @@ The `client_id` URL must be publicly fetchable — ATProto authorization servers
 ### 4. Run the backend
 
 ```
-pip install flask flask-cors
+pip install flask flask-cors flask-limiter
 python smudge-server.py
 ```
 
@@ -88,8 +88,6 @@ Data is stored in SQLite (`smudge.db`) — two tables: `atproto_index` (pointers
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SMUDGE_DATA_DIR` | `./data` | Directory for the SQLite database |
-| `SMUDGE_RATE_LIMIT` | `5` | Max anonymous comments per IP per window |
-| `SMUDGE_RATE_WINDOW` | `60` | Rate limit window in seconds |
 | `SMUDGE_MAX_TEXT` | `5000` | Max anonymous comment length in characters |
 
 ## Config
@@ -152,7 +150,7 @@ The `data-lexicon` attribute lets you use your own NSID (e.g. `com.example.smudg
 ## Security
 
 - **No ATProto content stored** — the backend only stores `(page, did, rkey)` pointers. Comment text, positions, and timestamps are fetched from each user's PDS at read time.
-- **IPs are hashed** — anonymous comment rate limiting uses SHA-256 hashed IPs, not raw addresses
+- **Rate limiting** — anonymous comment POSTs are limited to 5/minute per IP, ATProto index writes to 10/minute per IP (via [Flask-Limiter](https://flask-limiter.readthedocs.io)). IPs are resolved from `CF-Connecting-IP` / `X-Forwarded-For` headers for correct identification behind proxies
 - **Server-generated timestamps** — anonymous comment `createdAt` is set server-side to prevent rate limit bypass
 - **Text length limits** — anonymous comments are capped at `SMUDGE_MAX_TEXT` characters (default 5000)
 - **Token-based deletion** — anonymous comments return a uuid4 delete token; only the token holder can delete

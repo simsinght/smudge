@@ -22,17 +22,28 @@ import sqlite3
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 CORS(app)
-limiter = Limiter(get_remote_address, app=app)
 
 DATA_DIR = os.environ.get('SMUDGE_DATA_DIR', os.path.join(os.path.dirname(__file__), 'data'))
 DB_PATH = os.path.join(DATA_DIR, 'smudge.db')
 
 # Max text length for anonymous comments
 MAX_TEXT_LENGTH = int(os.environ.get('SMUDGE_MAX_TEXT', '5000'))
+
+
+def _real_ip():
+    """Real client IP via proxy headers, falls back to remote_addr."""
+    return request.headers.get('CF-Connecting-IP',
+           request.headers.get('X-Forwarded-For', request.remote_addr or '')).split(',')[0].strip()
+
+
+limiter = Limiter(
+    _real_ip,
+    app=app,
+    storage_uri="memory://",
+)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -101,6 +112,7 @@ def _hash_email(email):
 
 
 @app.route('/api/comments', methods=['GET'])
+@limiter.exempt
 def get_comments():
     page = request.args.get('page', '')
     if not page:
@@ -147,6 +159,7 @@ def get_comments():
 
 
 @app.route('/api/index', methods=['POST', 'DELETE'])
+@limiter.limit("10 per minute")
 def index_comment():
     """ATProto comment pointer management."""
     data = request.get_json(force=True, silent=True) or {}
@@ -176,7 +189,7 @@ def index_comment():
 
 
 @app.route('/api/comment', methods=['POST', 'DELETE'])
-@limiter.limit("5/minute", methods=["POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def anon_comment():
     """Anonymous comment submission and deletion."""
     data = request.get_json(force=True, silent=True) or {}
