@@ -13,12 +13,15 @@ fetches actual content from each user's PDS at read time — your data stays you
 Page is identified by a simple slug (e.g. "movieingOut", "housewarming").
 """
 
+import json
 import os
 import re
 import time
 import uuid
 import hashlib
 import sqlite3
+from urllib.request import urlopen, Request
+from urllib.error import URLError, HTTPError
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -31,6 +34,7 @@ DB_PATH = os.path.join(DATA_DIR, 'smudge.db')
 
 # Max text length for anonymous comments
 MAX_TEXT_LENGTH = int(os.environ.get('SMUDGE_MAX_TEXT', '5000'))
+LEXICON = os.environ.get('SMUDGE_LEXICON', 'computer.sims.smudge')
 
 
 def _real_ip():
@@ -46,6 +50,33 @@ limiter = Limiter(
 )
 
 os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _record_exists_on_pds(did, rkey):
+    """Check if a record still exists on the user's PDS. Returns True if it does."""
+    try:
+        # Resolve DID → PDS endpoint
+        doc_url = f'https://plc.directory/{did}'
+        with urlopen(Request(doc_url), timeout=5) as resp:
+            doc = json.loads(resp.read())
+        services = doc.get('service', [])
+        pds = next((s['serviceEndpoint'] for s in services if s.get('id') == '#atproto_pds'), None)
+        if not pds:
+            return True  # can't resolve → don't delete
+
+        # Check if the record exists
+        rec_url = (f'{pds}/xrpc/com.atproto.repo.getRecord'
+                   f'?repo={did}&collection={LEXICON}&rkey={rkey}')
+        with urlopen(Request(rec_url), timeout=5) as resp:
+            return True  # 200 → record exists
+    except HTTPError as e:
+        if e.code in (400, 404):
+            return False  # record not found → safe to delete pointer
+        return True  # other HTTP error → assume exists
+    except URLError:
+        return True  # network error → assume exists
+    except Exception:
+        return True
 
 
 def _safe_slug(slug):
@@ -172,6 +203,9 @@ def index_comment():
     slug = _safe_slug(data['page'])
 
     if request.method == 'DELETE':
+        if _record_exists_on_pds(data['did'], data['rkey']):
+            return jsonify({'error': 'record still exists on PDS'}), 403
+
         cur = db.execute(
             'DELETE FROM atproto_index WHERE page=? AND did=? AND rkey=?',
             (slug, data['did'], data['rkey'])
