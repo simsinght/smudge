@@ -7,12 +7,10 @@
  *   data-page          (required) canonical page URL
  *   data-api           (optional) backend base URL, defaults to origin
  *   data-oauth-client-id (optional) URL to client-metadata.json
- *   data-isso          (optional) Isso instance URL — auto-configures anonymous backend
- *   data-isso-uri      (optional) Isso thread URI, defaults to page path
  *   data-lexicon       (optional) ATProto collection NSID, defaults to computer.sims.smudge
  *
- * Custom anonymous backend:
- *   window.smudge.setAnonBackend({ submit, remove, canRemove, getReplyParent })
+ * Anonymous comments use the same API server (data-api). No separate service needed.
+ * Custom anonymous backend: window.smudge.setAnonBackend({ submit, remove, canRemove, getReplyParent })
  */
 
 const SCRIPT = document.currentScript || document.querySelector('script[src*="smudge"]');
@@ -20,8 +18,6 @@ const CONFIG = {
   page:          SCRIPT?.getAttribute('data-page') || window.location.pathname.replace(/^\//, ''),
   api:           SCRIPT?.getAttribute('data-api') || '',
   oauthClientId: SCRIPT?.getAttribute('data-oauth-client-id') || '/smudge/client-metadata.json',
-  isso:          SCRIPT?.getAttribute('data-isso') || '',
-  issoUri:       SCRIPT?.getAttribute('data-isso-uri') || '',
   lexicon:       SCRIPT?.getAttribute('data-lexicon') || 'computer.sims.smudge',
 };
 
@@ -1096,13 +1092,12 @@ function closeTooltip() {
 
 function commentMetaHtml(c) {
   if (c.source !== 'atproto') {
-    const identiconHtml = c.hash
-      ? `<span class="smudge-tooltip-identicon">${generateIdenticon(c.hash, 22)}</span>`
-      : '';
+    const avatarSeed = (c.author || '') + (c.hash || '') + (c.id || '');
+    const avatarHtml = `<span class="smudge-tooltip-identicon">${generateAvatar(avatarSeed, 22)}</span>`;
     const authorName = c.author
       ? `<span>${escapeHtml(c.author)}</span>`
       : `<span class="smudge-tooltip-anon">anonymous</span>`;
-    return `${identiconHtml}${authorName}<span class="smudge-tooltip-sep">&middot;</span><span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>`;
+    return `${avatarHtml}${authorName}<span class="smudge-tooltip-sep">&middot;</span><span class="smudge-tooltip-time">${formatTime(c.createdAt)}</span>`;
   }
   const profile = profileCache[c.did] || {};
   const avatarHtml = profile.avatar
@@ -1624,14 +1619,13 @@ function setupListPanelPullDismiss() {
 
 function listItemMetaHtml(c) {
   if (c.source !== 'atproto') {
-    const identiconHtml = c.hash
-      ? `<span class="smudge-list-item-identicon">${generateIdenticon(c.hash, 22)}</span>`
-      : '';
+    const avatarSeed = (c.author || '') + (c.hash || '') + (c.id || '');
+    const avatarHtml = `<span class="smudge-list-item-identicon">${generateAvatar(avatarSeed, 22)}</span>`;
     const authorName = c.author
       ? escapeHtml(c.author)
       : '<span style="font-style:italic;">anonymous</span>';
     return `
-      ${identiconHtml}
+      ${avatarHtml}
       <span style="color:#999;">${authorName}</span>
       <span style="color:#555;">&middot;</span>
       <span style="color:#666;">${formatTime(c.createdAt)}</span>
@@ -1753,11 +1747,10 @@ function replyContextHtml(parent) {
   if (!parent) return '';
   let authorHtml;
   if (parent.source !== 'atproto') {
-    const identiconHtml = parent.hash
-      ? `<span class="smudge-tooltip-identicon" style="display:inline-flex;vertical-align:middle;margin-right:4px;">${generateIdenticon(parent.hash, 16)}</span>`
-      : '';
+    const avatarSeed = (parent.author || '') + (parent.hash || '') + (parent.id || '');
+    const avatarHtml = `<span class="smudge-tooltip-identicon" style="display:inline-flex;vertical-align:middle;margin-right:4px;">${generateAvatar(avatarSeed, 16)}</span>`;
     const name = parent.author ? escapeHtml(parent.author) : 'anonymous';
-    authorHtml = `${identiconHtml}<strong>${name}</strong>`;
+    authorHtml = `${avatarHtml}<strong>${name}</strong>`;
   } else {
     const profile = profileCache[parent.did] || {};
     const avatarHtml = profile.avatar
@@ -1924,8 +1917,8 @@ async function deleteSmudge(comment) {
 // ── anonymous backend ──────────────────────────────────────────────────
 
 /**
- * Built-in Isso backend. Auto-configured when data-isso is set.
- * Replace with window.smudge.setAnonBackend() for a custom backend.
+ * Built-in anonymous backend using the smudge API server.
+ * Delete tokens stored in localStorage for ownership tracking.
  *
  * Interface:
  *   submit(text, x, y, { name, email, parent }) → Promise<any>
@@ -1933,43 +1926,68 @@ async function deleteSmudge(comment) {
  *   canRemove(comment)                           → boolean
  *   getReplyParent(replyToKey)                   → parentId | null
  */
-function createIssoBackend(issoUrl, issoUri) {
-  const ownedIds = new Set();
+const ANON_TOKENS_KEY = 'smudge-anon-tokens';
+
+function _loadAnonTokens() {
+  try { return JSON.parse(localStorage.getItem(ANON_TOKENS_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function _saveAnonToken(id, token) {
+  const tokens = _loadAnonTokens();
+  tokens[String(id)] = token;
+  localStorage.setItem(ANON_TOKENS_KEY, JSON.stringify(tokens));
+}
+
+function _removeAnonToken(id) {
+  const tokens = _loadAnonTokens();
+  delete tokens[String(id)];
+  localStorage.setItem(ANON_TOKENS_KEY, JSON.stringify(tokens));
+}
+
+function createSmudgeAnonBackend(apiBase) {
   return {
     async submit(text, x, y, opts = {}) {
-      const res = await fetch(`${issoUrl}/new?uri=${encodeURIComponent(issoUri)}`, {
+      const res = await fetch(`${apiBase}/api/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
+          page: CONFIG.page,
           text,
+          positionX: Math.round(x),
+          positionY: Math.round(y),
           author: opts.name || '',
           email: opts.email || '',
-          website: `https://smudge.pos/${Math.round(x)}/${Math.round(y)}`,
           parent: opts.parent ?? null,
         }),
       });
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Isso ${res.status}: ${body}`);
+        throw new Error(`anon submit ${res.status}: ${body}`);
       }
       const data = await res.json();
-      if (data?.id) ownedIds.add(String(data.id));
+      if (data?.id && data?.token) _saveAnonToken(data.id, data.token);
       return data;
     },
     async remove(id) {
-      const res = await fetch(`${issoUrl}/id/${id}`, {
+      const tokens = _loadAnonTokens();
+      const token = tokens[String(id)];
+      if (!token) throw new Error('no delete token for this comment');
+      const res = await fetch(`${apiBase}/api/comment`, {
         method: 'DELETE',
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: Number(id), token }),
       });
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Isso delete ${res.status}: ${body}`);
+        throw new Error(`anon delete ${res.status}: ${body}`);
       }
-      ownedIds.delete(String(id));
+      _removeAnonToken(id);
     },
     canRemove(c) {
-      return c.source !== 'atproto' && c.id != null && ownedIds.has(String(c.id));
+      if (c.source === 'atproto' || c.id == null) return false;
+      const tokens = _loadAnonTokens();
+      return !!tokens[String(c.id)];
     },
     getReplyParent(replyToKey) {
       if (replyToKey?.startsWith('anon:')) return parseInt(replyToKey.split(':')[1]);
@@ -1978,9 +1996,9 @@ function createIssoBackend(issoUrl, issoUri) {
   };
 }
 
-// Auto-configure Isso backend if data-isso is set
-if (CONFIG.isso) {
-  anonBackend = createIssoBackend(CONFIG.isso, CONFIG.issoUri || `/${CONFIG.page}`);
+// Auto-configure anonymous backend when API is available
+if (CONFIG.api) {
+  anonBackend = createSmudgeAnonBackend(CONFIG.api);
 }
 
 // Public API
@@ -2532,32 +2550,42 @@ function hashStr(s) {
   return Math.abs(h);
 }
 
-// ── identicon generation (for anonymous comments with hash) ─────────────
-const IDENTICON_COLORS = ['#9abf88','#5698c4','#e279a3','#9163b6','#be5168','#f19670','#e4bf80','#447c69'];
+// ── avatar generation (Bauhaus/Moholy-Nagy style) ───────────────────────
+const AVATAR_PALETTE = ['#9abf88','#5698c4','#e279a3','#9163b6','#be5168','#f19670','#e4bf80','#447c69'];
 
-function generateIdenticon(hash, size = 28) {
-  // 5x5 symmetric identicon from hash string
-  const hex = (hash || '').slice(-16);
-  let num = 0;
-  for (let i = 0; i < hex.length; i++) {
-    num = (num * 16 + parseInt(hex[i], 16)) || 0;
-  }
-  const bits = (num % (1 << 18)).toString(2).padStart(18, '0');
-  const fg = IDENTICON_COLORS[num % IDENTICON_COLORS.length];
-  const cell = size / 5;
-  let rects = '';
-  for (let row = 0; row < 5; row++) {
-    for (let col = 0; col < 3; col++) {
-      const idx = row * 3 + col;
-      if (bits[idx] === '1') {
-        rects += `<rect x="${col * cell}" y="${row * cell}" width="${cell}" height="${cell}" fill="${fg}"/>`;
-        if (col < 2) {
-          rects += `<rect x="${(4 - col) * cell}" y="${row * cell}" width="${cell}" height="${cell}" fill="${fg}"/>`;
-        }
-      }
-    }
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#2a2a2a" rx="3"/>${rects}</svg>`;
+function generateAvatar(name, size = 28) {
+  const h = hashStr(name || 'anon');
+  const n = AVATAR_PALETTE.length;
+  const pick = (i) => AVATAR_PALETTE[(h + i) % n];
+  const unit = (range, idx) => {
+    const v = Math.floor(h * (idx + 1) / Math.pow(10, idx) % range);
+    return (Math.floor(h / Math.pow(10, idx)) % 2 === 0) ? -v : v;
+  };
+
+  const bg = pick(0);
+  const rectColor = pick(1);
+  const circleColor = pick(2);
+  const lineColor = pick(3);
+  const tx1 = unit(23, 1), ty1 = unit(23, 2);
+  const tx2 = unit(21, 3), ty2 = unit(21, 4);
+  const tx3 = unit(19, 5), ty3 = unit(19, 6);
+  const rot1 = unit(360, 1), rot3 = unit(360, 3);
+  const isSquare = h % 4 < 2;
+
+  const vb = 80;
+  const r = size / vb; // unused but viewBox handles scaling
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${vb} ${vb}">
+    <clipPath id="ba${h}"><rect width="${vb}" height="${vb}" rx="8"/></clipPath>
+    <g clip-path="url(#ba${h})">
+      <rect width="${vb}" height="${vb}" fill="${bg}"/>
+      <rect x="10" y="30" width="${vb}" height="${isSquare ? vb : 10}" fill="${rectColor}"
+        transform="translate(${tx1} ${ty1}) rotate(${rot1} 40 40)"/>
+      <circle cx="40" cy="40" r="16" fill="${circleColor}"
+        transform="translate(${tx2} ${ty2})"/>
+      <line x1="0" y1="40" x2="80" y2="40" stroke="${lineColor}" stroke-width="2"
+        transform="translate(${tx3} ${ty3}) rotate(${rot3} 40 40)"/>
+    </g>
+  </svg>`;
 }
 
 // ── zoom compensation (mobile) ──────────────────────────────────────────
