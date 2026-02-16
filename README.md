@@ -2,22 +2,25 @@
 
 Spatial comments as oil smudge marks. Backed by [ATProto](https://atproto.com) identity with built-in anonymous fallback.
 
-Each comment is a record (`computer.sims.smudge`) written to the commenter's own ATProto PDS. A minimal Python backend (SQLite) handles indexing and anonymous comments. Comments appear as iridescent blobs scattered on the page surface, placed by users via long-press.
+Each comment is a record (`computer.sims.smudge`) written to the commenter's own ATProto PDS. The backend stores only pointers (`page, did, rkey`) — the frontend fetches actual comment content directly from each user's PDS at read time. Your data stays yours. Anonymous comments are stored server-side with rate limiting and token-based deletion.
 
 ## How it works
 
 ```
 Browser (smudge.js)              Backend (smudge-server.py)      User's PDS
        |                                 |                          |
-       |-- GET /api/comments?page=slug ->|  (reads from SQLite)     |
-       |<-- [{text, posX, posY, did}] ---|                          |
+       |-- GET /api/comments?page=slug ->|                          |
+       |<-- [{did, rkey}, ...] ----------|  (pointers only)         |
+       |                                 |                          |
+       |-- getRecord (per did/rkey) -----|------------------------->|
+       |<-- {text, posX, posY, ...} -----|--------------------------|
        |                                 |                          |
        |-- long-press → compose -------->|                          |
        |                                 |                          |
        |  ATProto path:                  |                          |
        |-- createRecord (OAuth) ---------|------------------------->|
        |<-- {uri, cid} -----------------|---------------------------|
-       |-- POST /api/index ------------->|  (indexes in SQLite)     |
+       |-- POST /api/index {did,rkey} ->|  (stores pointer)        |
        |                                 |                          |
        |  Anonymous path:                |                          |
        |-- POST /api/comment ----------->|  (stores in SQLite,      |
@@ -26,10 +29,12 @@ Browser (smudge.js)              Backend (smudge-server.py)      User's PDS
        |-- resolve DID → profile --------|--- public API ---------->|
 ```
 
+- **Your data stays yours** — ATProto comment content is fetched from each user's PDS at read time. The backend never stores comment text for ATProto users. Delete from your PDS, it's gone everywhere.
 - **Browser writes directly to the user's PDS** via OAuth — credentials never touch your server
-- **The backend is an index + anonymous store** — ATProto source of truth is always the user's PDS repo
-- **Anonymous comments** are stored server-side with IP rate limiting and token-based deletion
-- **No external dependencies** — no Isso, no firehose, just one SQLite database
+- **The backend is a thin pointer index** — it only knows _which_ records exist on _which_ page, not what they say
+- **Anonymous comments** are stored server-side with IP rate limiting (hashed), text length limits, and token-based deletion
+- **Stale cleanup** — if a PDS record returns 404 (user deleted it), the frontend automatically removes the stale pointer from the index
+- **No external dependencies** — no firehose, just one SQLite database
 
 ## Setup
 
@@ -70,13 +75,13 @@ python smudge-server.py
 
 Or integrate the routes into your existing server — see `smudge-server.py` for the definitions. The backend provides:
 
-- `GET /api/comments?page={slug}` — returns all comments for a page
-- `POST /api/index` — indexes an ATProto comment
-- `DELETE /api/index` — removes an ATProto comment
+- `GET /api/comments?page={slug}` — returns ATProto pointers (`{did, rkey}`) and anonymous comments
+- `POST /api/index` — stores an ATProto pointer (page, did, rkey only)
+- `DELETE /api/index` — removes an ATProto pointer
 - `POST /api/comment` — submits an anonymous comment (returns `{id, token}`)
 - `DELETE /api/comment` — deletes an anonymous comment (requires token)
 
-Data is stored in a single SQLite database (`smudge.db`).
+Data is stored in SQLite (`smudge.db`) — two tables: `atproto_index` (pointers) and `anon_comments` (anonymous content).
 
 #### Environment variables
 
@@ -85,6 +90,7 @@ Data is stored in a single SQLite database (`smudge.db`).
 | `SMUDGE_DATA_DIR` | `./data` | Directory for the SQLite database |
 | `SMUDGE_RATE_LIMIT` | `5` | Max anonymous comments per IP per window |
 | `SMUDGE_RATE_WINDOW` | `60` | Rate limit window in seconds |
+| `SMUDGE_MAX_TEXT` | `5000` | Max anonymous comment length in characters |
 
 ## Config
 
@@ -142,6 +148,15 @@ The `data-lexicon` attribute lets you use your own NSID (e.g. `com.example.smudg
 - **Reply**: reply to any comment from its tooltip
 - **Delete**: remove your own comments (ATProto via PDS, anonymous via delete token)
 - **Keyboard**: Cmd/Ctrl+Enter to submit the compose form
+
+## Security
+
+- **No ATProto content stored** — the backend only stores `(page, did, rkey)` pointers. Comment text, positions, and timestamps are fetched from each user's PDS at read time.
+- **IPs are hashed** — anonymous comment rate limiting uses SHA-256 hashed IPs, not raw addresses
+- **Server-generated timestamps** — anonymous comment `createdAt` is set server-side to prevent rate limit bypass
+- **Text length limits** — anonymous comments are capped at `SMUDGE_MAX_TEXT` characters (default 5000)
+- **Token-based deletion** — anonymous comments return a uuid4 delete token; only the token holder can delete
+- **Stale pointer cleanup** — PDS 404s trigger automatic index cleanup
 
 ## License
 

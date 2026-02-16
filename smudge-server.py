@@ -2,10 +2,13 @@
 Smudge API — spatial comment system backed by SQLite.
 
   GET    /api/comments?page={slug}  — all comments for a page
-  POST   /api/index                 — index an ATProto comment
-  DELETE /api/index                 — remove an ATProto comment
+  POST   /api/index                 — index an ATProto comment (pointer only)
+  DELETE /api/index                 — remove an ATProto comment pointer
   POST   /api/comment               — submit an anonymous comment
   DELETE /api/comment               — delete an anonymous comment (token required)
+
+ATProto comments are stored as thin pointers (page, did, rkey). The frontend
+fetches actual content from each user's PDS at read time — your data stays yours.
 
 Page is identified by a simple slug (e.g. "movieingOut", "housewarming").
 """
@@ -18,16 +21,18 @@ import hashlib
 import sqlite3
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 CORS(app)
+limiter = Limiter(get_remote_address, app=app)
 
 DATA_DIR = os.environ.get('SMUDGE_DATA_DIR', os.path.join(os.path.dirname(__file__), 'data'))
 DB_PATH = os.path.join(DATA_DIR, 'smudge.db')
 
-# Rate limiting: max anonymous comments per IP within the window
-RATE_LIMIT = int(os.environ.get('SMUDGE_RATE_LIMIT', '5'))
-RATE_WINDOW = int(os.environ.get('SMUDGE_RATE_WINDOW', '60'))  # seconds
+# Max text length for anonymous comments
+MAX_TEXT_LENGTH = int(os.environ.get('SMUDGE_MAX_TEXT', '5000'))
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -56,45 +61,36 @@ def close_db(exc):
 def init_db():
     """Create tables if they don't exist."""
     db = sqlite3.connect(DB_PATH)
-    db.execute('''CREATE TABLE IF NOT EXISTS comments (
+    # ATProto pointers — just page + did + rkey
+    db.execute('''CREATE TABLE IF NOT EXISTS atproto_index (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        page  TEXT NOT NULL,
+        did   TEXT NOT NULL,
+        rkey  TEXT NOT NULL,
+        UNIQUE(did, rkey)
+    )''')
+    db.execute('''CREATE INDEX IF NOT EXISTS idx_atproto_page
+                  ON atproto_index(page)''')
+    # Anonymous comments — full content stored server-side
+    db.execute('''CREATE TABLE IF NOT EXISTS anon_comments (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         page          TEXT NOT NULL,
-        source        TEXT NOT NULL,  -- 'atproto' or 'anon'
-        did           TEXT,
-        rkey          TEXT,
         text          TEXT NOT NULL,
         position_x    INTEGER NOT NULL DEFAULT 0,
         position_y    INTEGER NOT NULL DEFAULT 0,
         created_at    TEXT NOT NULL,
-        handle        TEXT,
         author        TEXT,
         email_hash    TEXT,
         reply_to      TEXT,
-        delete_token  TEXT,
-        ip            TEXT,
-        UNIQUE(did, rkey)  -- deduplicate ATProto comments
+        delete_token  TEXT NOT NULL
     )''')
-    db.execute('''CREATE INDEX IF NOT EXISTS idx_comments_page
-                  ON comments(page)''')
+    db.execute('''CREATE INDEX IF NOT EXISTS idx_anon_page
+                  ON anon_comments(page)''')
     db.commit()
     db.close()
 
 
 init_db()
-
-
-def _client_ip():
-    return request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
-
-
-def _check_rate_limit(db, ip):
-    """Returns True if the request is within limits."""
-    cutoff = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(time.time() - RATE_WINDOW))
-    row = db.execute(
-        "SELECT COUNT(*) FROM comments WHERE source='anon' AND ip=? AND created_at > ?",
-        (ip, cutoff)
-    ).fetchone()
-    return row[0] < RATE_LIMIT
 
 
 def _hash_email(email):
@@ -112,33 +108,39 @@ def get_comments():
 
     slug = _safe_slug(page)
     db = get_db()
-    rows = db.execute(
-        'SELECT * FROM comments WHERE page=? ORDER BY created_at ASC', (slug,)
+
+    # ATProto pointers
+    atproto_rows = db.execute(
+        'SELECT did, rkey FROM atproto_index WHERE page=?', (slug,)
+    ).fetchall()
+
+    # Anonymous comments (full content)
+    anon_rows = db.execute(
+        'SELECT * FROM anon_comments WHERE page=? ORDER BY created_at ASC', (slug,)
     ).fetchall()
 
     results = []
-    for r in rows:
+
+    for r in atproto_rows:
+        results.append({
+            'source': 'atproto',
+            'did': r['did'],
+            'rkey': r['rkey'],
+        })
+
+    for r in anon_rows:
         c = {
             'id': r['id'],
-            'page': r['page'],
-            'source': r['source'],
+            'source': 'anon',
             'text': r['text'],
             'positionX': r['position_x'],
             'positionY': r['position_y'],
             'createdAt': r['created_at'],
+            'author': r['author'] or '',
+            'hash': r['email_hash'] or '',
         }
-        if r['source'] == 'atproto':
-            c['did'] = r['did']
-            c['rkey'] = r['rkey']
-            c['handle'] = r['handle'] or ''
-        else:
-            c['author'] = r['author'] or ''
-            c['hash'] = r['email_hash'] or ''
         if r['reply_to']:
-            if r['source'] == 'atproto':
-                c['replyTo'] = r['reply_to']
-            else:
-                c['parent'] = int(r['reply_to']) if r['reply_to'].isdigit() else None
+            c['parent'] = int(r['reply_to']) if r['reply_to'].isdigit() else None
         results.append(c)
 
     return jsonify(results)
@@ -146,40 +148,35 @@ def get_comments():
 
 @app.route('/api/index', methods=['POST', 'DELETE'])
 def index_comment():
-    """ATProto comment indexing."""
+    """ATProto comment pointer management."""
     data = request.get_json(force=True, silent=True) or {}
     db = get_db()
 
+    for field in ['did', 'rkey', 'page']:
+        if field not in data:
+            return jsonify({'error': f'missing field: {field}'}), 400
+
+    slug = _safe_slug(data['page'])
+
     if request.method == 'DELETE':
-        for field in ['did', 'rkey', 'page']:
-            if field not in data:
-                return jsonify({'error': f'missing field: {field}'}), 400
-        slug = _safe_slug(data['page'])
         cur = db.execute(
-            'DELETE FROM comments WHERE page=? AND did=? AND rkey=?',
+            'DELETE FROM atproto_index WHERE page=? AND did=? AND rkey=?',
             (slug, data['did'], data['rkey'])
         )
         db.commit()
         return jsonify({'ok': True, 'removed': cur.rowcount})
 
-    required = ['did', 'rkey', 'page', 'text', 'positionX', 'positionY', 'createdAt']
-    missing = [k for k in required if k not in data]
-    if missing:
-        return jsonify({'error': f'missing fields: {missing}'}), 400
-
-    slug = _safe_slug(data['page'])
-    db.execute('''INSERT OR REPLACE INTO comments
-        (page, source, did, rkey, text, position_x, position_y, created_at, handle, reply_to)
-        VALUES (?, 'atproto', ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (slug, data['did'], data['rkey'], data['text'],
-         data['positionX'], data['positionY'], data['createdAt'],
-         data.get('handle', ''), data.get('replyTo'))
+    # POST — add pointer
+    db.execute('''INSERT OR IGNORE INTO atproto_index (page, did, rkey)
+        VALUES (?, ?, ?)''',
+        (slug, data['did'], data['rkey'])
     )
     db.commit()
     return jsonify({'ok': True})
 
 
 @app.route('/api/comment', methods=['POST', 'DELETE'])
+@limiter.limit("5/minute", methods=["POST"])
 def anon_comment():
     """Anonymous comment submission and deletion."""
     data = request.get_json(force=True, silent=True) or {}
@@ -192,14 +189,14 @@ def anon_comment():
             return jsonify({'error': 'missing id or token'}), 400
 
         row = db.execute(
-            'SELECT delete_token FROM comments WHERE id=? AND source=?',
-            (comment_id, 'anon')
+            'SELECT delete_token FROM anon_comments WHERE id=?',
+            (comment_id,)
         ).fetchone()
 
         if not row or row['delete_token'] != token:
             return jsonify({'error': 'invalid token'}), 403
 
-        db.execute('DELETE FROM comments WHERE id=?', (comment_id,))
+        db.execute('DELETE FROM anon_comments WHERE id=?', (comment_id,))
         db.commit()
         return jsonify({'ok': True})
 
@@ -209,22 +206,22 @@ def anon_comment():
     if missing:
         return jsonify({'error': f'missing fields: {missing}'}), 400
 
-    ip = _client_ip()
-    if not _check_rate_limit(db, ip):
-        return jsonify({'error': 'too many comments, try again later'}), 429
+    text = data['text']
+    if len(text) > MAX_TEXT_LENGTH:
+        return jsonify({'error': f'text exceeds {MAX_TEXT_LENGTH} characters'}), 400
 
     slug = _safe_slug(data['page'])
     token = uuid.uuid4().hex
-    created_at = data.get('createdAt') or time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
+    created_at = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
 
-    cur = db.execute('''INSERT INTO comments
-        (page, source, text, position_x, position_y, created_at,
-         author, email_hash, reply_to, delete_token, ip)
-        VALUES (?, 'anon', ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (slug, data['text'], data['positionX'], data['positionY'],
+    cur = db.execute('''INSERT INTO anon_comments
+        (page, text, position_x, position_y, created_at,
+         author, email_hash, reply_to, delete_token)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (slug, text, data['positionX'], data['positionY'],
          created_at, data.get('author', ''), _hash_email(data.get('email', '')),
          str(data['parent']) if data.get('parent') else None,
-         token, ip)
+         token)
     )
     db.commit()
 

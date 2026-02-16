@@ -1525,13 +1525,23 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
 // ── list panel ──────────────────────────────────────────────────────────
 function positionListPanelMobile() {
   if (!isMobile) return;
-  // Page scroll is locked so we can use simple fixed positioning
-  // Reset any viewport-tracking styles
-  listPanel.style.left = '0';
-  listPanel.style.width = '100%';
-  listPanel.style.bottom = '0';
-  listPanel.style.top = 'auto';
-  listPanel.style.maxHeight = '75vh';
+  const vv = window.visualViewport;
+  if (!vv) return;
+
+  // Position and size relative to the visual viewport so it's
+  // usable even when pinch-zoomed
+  const panelH = Math.round(vv.height * 0.75);
+  listPanel.style.position = 'fixed';
+  listPanel.style.left = vv.offsetLeft + 'px';
+  listPanel.style.right = 'auto';
+  listPanel.style.width = vv.width + 'px';
+  listPanel.style.top = (vv.offsetTop + vv.height - panelH) + 'px';
+  listPanel.style.bottom = 'auto';
+  listPanel.style.maxHeight = panelH + 'px';
+  listPanel.style.height = 'auto';
+  // Scale font size to match visual viewport
+  const scale = vv.width / (window.screen.width || 375);
+  listPanel.style.fontSize = Math.round(16 * scale) + 'px';
 }
 
 let _scrollLockPos = null;
@@ -1863,24 +1873,27 @@ async function submitAtprotoComment(text, posX, posY, replyTo = null) {
   // Extract rkey from the URI
   const rkey = res.data.uri.split('/').pop();
 
-  // Index on our backend
-  const indexBody = {
+  // Index pointer on our backend (content stays in the PDS)
+  await fetch(`${CONFIG.api}/api/index`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ did: oauthSession.did, rkey, page: CONFIG.page }),
+  });
+
+  // Optimistically inject into local state + cache so the comment appears
+  // immediately without waiting for PDS propagation to the public API
+  const comment = {
+    source: 'atproto',
     did: oauthSession.did,
     rkey,
-    page: CONFIG.page,
     text,
     positionX: Math.round(posX),
     positionY: Math.round(posY),
     createdAt: now,
-    handle: oauthSession.handle,
+    replyTo: replyTo || null,
   };
-  if (replyTo) indexBody.replyTo = replyTo;
-
-  await fetch(`${CONFIG.api}/api/index`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(indexBody),
-  });
+  pdsRecordCache[_pdsRecordCacheKey(oauthSession.did, rkey)] = comment;
+  comments.push(comment);
 }
 
 // ── delete smudge ─────────────────────────────────────────────────────
@@ -1910,7 +1923,8 @@ async function deleteSmudge(comment) {
     }),
   });
 
-  // Remove from local state
+  // Remove from local state + cache
+  delete pdsRecordCache[_pdsRecordCacheKey(comment.did, comment.rkey)];
   comments = comments.filter(c => !(c.did === comment.did && c.rkey === comment.rkey));
 }
 
@@ -2179,15 +2193,110 @@ function showSignInPopup() {
 }
 
 // ── loading comments ───────────────────────────────────────────────────
+// Cache for PDS records — avoids re-fetching on every loadComments()
+const pdsRecordCache = {};
+// Cache for DID → PDS endpoint resolution
+const pdsEndpointCache = {};
+
+function _pdsRecordCacheKey(did, rkey) { return `${did}:${rkey}`; }
+
+async function resolvePdsEndpoint(did) {
+  if (pdsEndpointCache[did]) return pdsEndpointCache[did];
+  const res = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
+  if (!res.ok) return null;
+  const doc = await res.json();
+  const svc = (doc.service || []).find(s => s.id === '#atproto_pds');
+  const endpoint = svc?.serviceEndpoint || null;
+  if (endpoint) pdsEndpointCache[did] = endpoint;
+  return endpoint;
+}
+
+async function resolveAtprotoRecords(pointers) {
+  // Resolve PDS endpoints for all unique DIDs in parallel
+  const uniqueDids = [...new Set(pointers.map(p => p.did))];
+  await Promise.allSettled(uniqueDids.map(did => resolvePdsEndpoint(did)));
+
+  // Fetch each ATProto record from the user's own PDS in parallel
+  const results = await Promise.allSettled(pointers.map(async (ptr) => {
+    const cacheKey = _pdsRecordCacheKey(ptr.did, ptr.rkey);
+    if (pdsRecordCache[cacheKey]) return pdsRecordCache[cacheKey];
+
+    const pds = pdsEndpointCache[ptr.did];
+    if (!pds) return null; // can't resolve DID
+
+    const url = `${pds}/xrpc/com.atproto.repo.getRecord` +
+      `?repo=${encodeURIComponent(ptr.did)}` +
+      `&collection=${encodeURIComponent(CONFIG.lexicon)}` +
+      `&rkey=${encodeURIComponent(ptr.rkey)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null; // 404 = deleted, skip it
+
+    const data = await res.json();
+    const v = data.value || {};
+    const comment = {
+      source: 'atproto',
+      did: ptr.did,
+      rkey: ptr.rkey,
+      text: v.text || '',
+      positionX: v.positionX ?? 0,
+      positionY: v.positionY ?? 0,
+      createdAt: v.createdAt || '',
+      replyTo: v.replyTo || null,
+    };
+    pdsRecordCache[cacheKey] = comment;
+    return comment;
+  }));
+
+  // Collect resolved comments, drop nulls (deleted/failed)
+  const resolved = [];
+  const stale = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === 'fulfilled' && results[i].value) {
+      resolved.push(results[i].value);
+    } else {
+      // Only clean up if we previously had this record cached (confirms it existed
+      // and is now gone). Skip cleanup for never-seen records — they may just be
+      // slow to propagate to the public API.
+      const ck = _pdsRecordCacheKey(pointers[i].did, pointers[i].rkey);
+      if (pdsRecordCache[ck]) {
+        delete pdsRecordCache[ck];
+        stale.push(pointers[i]);
+      }
+    }
+  }
+
+  // Fire-and-forget cleanup of confirmed stale pointers
+  for (const ptr of stale) {
+    fetch(`${CONFIG.api}/api/index`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ did: ptr.did, rkey: ptr.rkey, page: CONFIG.page }),
+    }).catch(() => {});
+  }
+
+  return resolved;
+}
+
 async function loadComments() {
   try {
     const url = `${CONFIG.api}/api/comments?page=${encodeURIComponent(CONFIG.page)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    comments = await res.json();
+    const entries = await res.json();
 
-    // Resolve ATProto profiles
-    const dids = [...new Set(comments.filter(c => c.source === 'atproto' && c.did).map(c => c.did))];
+    // Split into ATProto pointers and anonymous comments
+    const atprotoPointers = entries.filter(e => e.source === 'atproto');
+    const anonComments = entries.filter(e => e.source !== 'atproto');
+
+    // Resolve ATProto records from each user's PDS
+    const atprotoComments = await resolveAtprotoRecords(atprotoPointers);
+
+    // Merge and sort by createdAt
+    comments = [...atprotoComments, ...anonComments]
+      .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+
+    // Resolve ATProto profiles (avatars, display names)
+    const dids = [...new Set(atprotoComments.map(c => c.did))];
     if (dids.length > 0) {
       await resolveProfiles(dids);
     }
