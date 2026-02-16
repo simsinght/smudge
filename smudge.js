@@ -344,6 +344,7 @@ function injectStyles() {
       border-radius: clamp(12px, 1vw, 22px);
       padding: clamp(16px, 1.5vw, 36px);
       width: clamp(280px, 22vw, 500px);
+      box-sizing: border-box;
       color: #ddd;
       font-family: 'Georgia', serif;
       box-shadow: 0 12px 48px rgba(0,0,0,0.7);
@@ -507,8 +508,25 @@ function injectStyles() {
     }
     .smudge-nudge-actions {
       display: flex;
+      flex-direction: column;
+      gap: clamp(8px, 0.7vw, 16px);
+      align-items: flex-start;
+    }
+    .smudge-nudge-actions-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       gap: clamp(6px, 0.6vw, 14px);
-      flex-wrap: wrap;
+      align-self: stretch;
+    }
+    .smudge-dismiss {
+      background: none;
+      border: none;
+      color: #666;
+      font-family: 'Georgia', serif;
+      font-size: clamp(12px, 0.9vw, 20px);
+      cursor: pointer;
+      padding: 4px 8px;
     }
 
     /* ── long-press progress ── */
@@ -668,6 +686,7 @@ function injectStyles() {
       border-left: 1px solid rgba(255,255,255,0.08);
       z-index: 10003;
       overflow-y: auto;
+      overscroll-behavior: contain;
       transform: translateX(100%);
       transition: transform 0.3s ease;
       font-family: 'Georgia', serif;
@@ -676,18 +695,19 @@ function injectStyles() {
     .smudge-list-panel.open { transform: translateX(0); }
     @media (pointer: coarse) {
       .smudge-list-panel {
-        top: auto;
-        bottom: 0;
+        top: 0;
         left: 0;
-        right: 0;
-        width: 100%;
-        max-height: 75vh;
+        right: auto;
+        bottom: auto;
         border-left: none;
         border-top: 1px solid rgba(255,255,255,0.12);
         border-radius: 16px 16px 0 0;
-        transform: translateY(100%);
+        transform: none;
+        display: none;
       }
-      .smudge-list-panel.open { transform: translateY(0); }
+      .smudge-list-panel.open {
+        display: block;
+      }
     }
     .smudge-list-header {
       position: sticky;
@@ -719,8 +739,15 @@ function injectStyles() {
     .smudge-list-close:hover { background: rgba(255,255,255,0.08); }
     .smudge-list-items { padding: clamp(8px, 0.6vw, 16px); }
     .smudge-list-item {
+      display: block;
+      width: 100%;
       padding: clamp(12px, 1vw, 22px);
+      border: none;
       border-bottom: 1px solid rgba(255,255,255,0.04);
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-align: left;
       cursor: pointer;
       border-radius: clamp(6px, 0.5vw, 12px);
       transition: background 0.15s;
@@ -807,7 +834,7 @@ function injectStyles() {
       .smudge-list-empty { font-size: 18px; padding: 40px; }
       .smudge-tooltip {
         min-width: 240px;
-        max-width: 85vw;
+        max-width: min(85vw, 340px);
       }
       .smudge-tooltip-meta {
         font-size: 14px;
@@ -866,11 +893,13 @@ function injectStyles() {
     /* ── highlight pulse for jump-to ── */
     @keyframes smudge-highlight {
       0%   { filter: brightness(1) drop-shadow(0 0 0 transparent); }
-      30%  { filter: brightness(2) drop-shadow(0 0 20px rgba(200,160,80,0.8)); }
+      12%  { filter: brightness(2) drop-shadow(0 0 20px rgba(200,160,80,0.8)); }
+      35%  { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+      47%  { filter: brightness(2) drop-shadow(0 0 20px rgba(200,160,80,0.8)); }
       100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
     }
     .smudge-highlight {
-      animation: smudge-highlight 1.2s ease forwards;
+      animation: smudge-highlight 2.4s ease forwards;
       z-index: 9600 !important;
     }
   `;
@@ -925,10 +954,10 @@ function createDOM() {
   listBtn.addEventListener('click', toggleListPanel);
   uiOverlay.appendChild(listBtn);
 
-  // List panel
+  // List panel — in document root for absolute positioning relative to page
   listPanel = document.createElement('div');
   listPanel.className = 'smudge-list-panel';
-  uiOverlay.appendChild(listPanel);
+  document.documentElement.appendChild(listPanel);
   setupListPanelPullDismiss();
 
   // Press indicator (chat bubble with completing ring)
@@ -988,6 +1017,7 @@ let pressTimer = null;
 let pressPos = null;
 let pressStartTime = 0;
 let pressPointerId = null;
+let pressReady = false;  // true when hold time elapsed, waiting for finger lift
 const activePointers = new Set();
 
 function cancelPress() {
@@ -996,6 +1026,7 @@ function cancelPress() {
     pressTimer = null;
   }
   pressPointerId = null;
+  pressReady = false;
   pressRing.classList.remove('active');
 }
 
@@ -1053,22 +1084,49 @@ function onPressStart(e) {
   pressStartTime = Date.now();
 
   // Show progress ring and start long-press timer (both touch and mouse)
+  // Scale ring to match toggle button sizing on mobile
+  const vv = window.visualViewport;
+  let ringOffset = 60;
+  if (isMobile && vv) {
+    const scale = vv.width / screen.width;
+    const ringSize = Math.min(Math.round(48 * scale), Math.min(vv.width, vv.height) * 0.12);
+    pressRing.style.width = ringSize + 'px';
+    pressRing.style.height = ringSize + 'px';
+    ringOffset = ringSize + Math.round(30 * scale);  // clear the finger
+  }
   pressRing.style.left = (pressPos.x + 20) + 'px';
-  pressRing.style.top = (pressPos.y - 60) + 'px';
+  pressRing.style.top = (pressPos.y - ringOffset) + 'px';
   pressRing.classList.remove('active');
   void pressRing.offsetWidth; // reflow
   pressRing.classList.add('active');
 
   pressTimer = setTimeout(() => {
-    pressRing.classList.remove('active');
-    closeTooltip();
-    closeCompose();
-    openCompose(pressPos.x, pressPos.y);
     pressTimer = null;
+    if (isMobile) {
+      // Mobile: mark ready, open on finger lift so iOS grants keyboard focus
+      pressReady = true;
+      pressRing.classList.remove('active');
+    } else {
+      // Desktop: open immediately (no keyboard focus issue)
+      pressRing.classList.remove('active');
+      closeTooltip();
+      closeCompose();
+      openCompose(pressPos.x, pressPos.y);
+    }
   }, 1000);
 }
 
 function onPressEnd(e) {
+  if (pressReady && pressPos) {
+    // Finger lifted after hold completed — open compose from a real user gesture
+    const px = pressPos.x, py = pressPos.y;
+    pressReady = false;
+    cancelPress();
+    closeTooltip();
+    closeCompose();
+    openCompose(px, py);
+    return;
+  }
   cancelPress();
 }
 
@@ -1339,6 +1397,9 @@ function scaleMobilePopup(popup) {
   popup.querySelectorAll('.smudge-signin-hint').forEach(el => {
     el.style.fontSize = Math.round(13 * scale) + 'px';
   });
+  popup.querySelectorAll('.smudge-dismiss').forEach(el => {
+    el.style.fontSize = Math.round(13 * scale) + 'px';
+  });
   popup.querySelectorAll('.smudge-signin-actions').forEach(el => {
     el.style.gap = Math.round(8 * scale) + 'px';
     el.style.marginTop = Math.round(14 * scale) + 'px';
@@ -1354,6 +1415,8 @@ function openCompose(containerX, containerY, replyTo = null) {
   // Decide what to show based on auth state
   if (oauthSession) {
     showComposeForm(popup, containerX, containerY, 'atproto', replyTo);
+  } else if (_nudgeShown && anonBackend) {
+    showComposeForm(popup, containerX, containerY, 'anon', replyTo);
   } else {
     showAuthChoice(popup, containerX, containerY, replyTo);
   }
@@ -1390,6 +1453,15 @@ function openCompose(containerX, containerY, replyTo = null) {
     popup.style.top = y + 'px';
   }
   activeCompose = popup;
+  focusComposeInput(popup);
+}
+
+function focusComposeInput(popup) {
+  const nameInput = popup.querySelector('.smudge-compose-name');
+  const textarea = popup.querySelector('textarea');
+  const target = (nameInput && !nameInput.value) ? nameInput : textarea;
+  if (!target) return;
+  target.focus();
 }
 
 function showAuthChoice(popup, x, y, replyTo = null) {
@@ -1415,21 +1487,30 @@ function showAuthChoice(popup, x, y, replyTo = null) {
 
   if (hasAnon) {
     popup.querySelector('[data-action="anon"]').addEventListener('click', () => {
-      showNudge(popup, x, y, replyTo);
+      if (_nudgeShown) {
+        showComposeForm(popup, x, y, 'anon', replyTo);
+      } else {
+        showNudge(popup, x, y, replyTo);
+      }
     });
   }
 
   popup.querySelector('[data-action="cancel"]').addEventListener('click', closeCompose);
 }
 
+let _nudgeShown = false;  // only show nudge once per page visit
+
 function showNudge(popup, x, y, replyTo = null) {
   popup.innerHTML = `
     <div class="smudge-nudge">
-      with an atmosphere account, your words are yours to keep forever — stored in your own data vault, not mine. and you give me nothing. still want to go anonymous?
+      with an atmosphere account, your words are yours to keep — stored in your own data vault, not mine. still want to go anonymous?
     </div>
     <div class="smudge-nudge-actions">
       <button class="smudge-btn smudge-btn-primary" data-action="signup">ok, sign me up</button>
-      <button class="smudge-btn smudge-btn-secondary" data-action="stay-anon">stay anonymous</button>
+      <div class="smudge-nudge-actions-row">
+        <button class="smudge-btn smudge-btn-secondary" data-action="stay-anon">stay anonymous</button>
+        <button class="smudge-dismiss" data-action="cancel">dismiss</button>
+      </div>
     </div>
   `;
   scaleMobilePopup(popup);
@@ -1440,8 +1521,11 @@ function showNudge(popup, x, y, replyTo = null) {
   });
 
   popup.querySelector('[data-action="stay-anon"]').addEventListener('click', () => {
+    _nudgeShown = true;
     showComposeForm(popup, x, y, 'anon', replyTo);
   });
+
+  popup.querySelector('[data-action="cancel"]').addEventListener('click', closeCompose);
 }
 
 function showComposeForm(popup, x, y, mode, replyTo = null) {
@@ -1483,7 +1567,9 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
     emailInput.value = localStorage.getItem('smudge-anon-email') || '';
   }
 
-  requestAnimationFrame(() => textarea.focus());
+  // Focus synchronously — works when called from a click handler (nudge/auth choice flow)
+  const focusEl = (nameInput && !nameInput.value) ? nameInput : textarea;
+  if (focusEl) focusEl.focus();
 
   popup.querySelector('[data-action="cancel"]').addEventListener('click', closeCompose);
 
@@ -1523,25 +1609,57 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
 }
 
 // ── list panel ──────────────────────────────────────────────────────────
-function positionListPanelMobile() {
+let _listPanelRafId = 0;
+let _listPanelDragY = 0;  // pull-to-dismiss offset
+
+function updateListPanelPosition() {
+  if (!isMobile || !listPanel.classList.contains('open')) return;
+  const vv = window.visualViewport;
+  if (!vv) return;
+
+  const panelH = Math.round(vv.height * 0.75);
+  const x = vv.offsetLeft;
+  const y = vv.offsetTop + vv.height - panelH + _listPanelDragY;
+
+  listPanel.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  listPanel.style.width = vv.width + 'px';
+  listPanel.style.maxHeight = panelH + 'px';
+
+  // Partial zoom compensation for font size — text tracks zoom but less dramatically
+  const zoom = screen.width / vv.width;             // ~0.4 zoomed out, ~1.0 at 1:1
+  const fontScale = Math.pow(1 / zoom, 0.6);        // 60% compensation
+  const clamped = Math.max(0.9, Math.min(fontScale, 1.8));
+  listPanel.style.fontSize = (clamped * 100).toFixed(1) + '%';
+
+  // Fade during pull-to-dismiss drag
+  if (_listPanelDragY > 0) {
+    listPanel.style.opacity = (1 - Math.min(_listPanelDragY / 250, 0.45)).toFixed(2);
+  }
+}
+
+function setupListPanelZoomCompensation() {
   if (!isMobile) return;
   const vv = window.visualViewport;
   if (!vv) return;
 
-  // Position and size relative to the visual viewport so it's
-  // usable even when pinch-zoomed
-  const panelH = Math.round(vv.height * 0.75);
+  // Same pattern as button zoom compensation
   listPanel.style.position = 'fixed';
-  listPanel.style.left = vv.offsetLeft + 'px';
+  listPanel.style.left = '0';
+  listPanel.style.top = '0';
   listPanel.style.right = 'auto';
-  listPanel.style.width = vv.width + 'px';
-  listPanel.style.top = (vv.offsetTop + vv.height - panelH) + 'px';
   listPanel.style.bottom = 'auto';
-  listPanel.style.maxHeight = panelH + 'px';
-  listPanel.style.height = 'auto';
-  // Scale font size to match visual viewport
-  const scale = vv.width / (window.screen.width || 375);
-  listPanel.style.fontSize = Math.round(16 * scale) + 'px';
+  listPanel.style.willChange = 'transform';
+
+  function onViewportChange() {
+    if (_listPanelRafId) return;
+    _listPanelRafId = requestAnimationFrame(() => {
+      _listPanelRafId = 0;
+      updateListPanelPosition();
+    });
+  }
+
+  vv.addEventListener('resize', onViewportChange);
+  vv.addEventListener('scroll', onViewportChange);
 }
 
 let _scrollLockPos = null;
@@ -1574,56 +1692,81 @@ function unlockPageScroll() {
 function toggleListPanel() {
   listPanel.classList.toggle('open');
   if (listPanel.classList.contains('open')) {
-    positionListPanelMobile();
     populateListPanel();
-    if (isMobile) lockPageScroll();
+    if (isMobile) updateListPanelPosition();
   } else {
-    if (isMobile) unlockPageScroll();
+    closeListPanel();
   }
 }
 
 function closeListPanel() {
   listPanel.classList.remove('open');
-  listPanel.style.transform = '';
-  listPanel.style.transition = '';
-  if (isMobile) unlockPageScroll();
+  if (!isMobile) {
+    listPanel.removeAttribute('style');
+  }
+  // On mobile, keep the fixed+translate3d positioning but hide via CSS
 }
 
 function setupListPanelPullDismiss() {
-  if (!isMobile) return;
   let startY = null;
-  let currentY = 0;
+  let dragging = false;
 
   listPanel.addEventListener('touchstart', (e) => {
-    // Only pull-to-dismiss if scrolled to top of list
+    if (e.touches.length > 1) { startY = null; return; }  // pinch — bail
     if (listPanel.scrollTop > 5) return;
     startY = e.touches[0].clientY;
-    currentY = 0;
+    dragging = false;
+    _listPanelDragY = 0;
     listPanel.style.transition = 'none';
   }, { passive: true });
 
   listPanel.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 1) return;  // let pinch-to-zoom through
     if (startY === null) return;
     const dy = e.touches[0].clientY - startY;
-    if (dy < 0) { currentY = 0; listPanel.style.transform = ''; return; }
-    currentY = dy;
-    listPanel.style.transform = `translateY(${dy}px)`;
-  }, { passive: true });
+    const canScroll = listPanel.scrollHeight > listPanel.clientHeight;
+    if (dy > 0) {
+      dragging = true;
+      e.preventDefault();           // stop page from scrolling underneath
+      _listPanelDragY = dy;
+      updateListPanelPosition();
+    } else if (!canScroll) {
+      e.preventDefault();           // no panel content to scroll — block page scroll
+    } else if (dragging) {
+      // Was dragging down, now dragging back up — clamp at 0
+      _listPanelDragY = 0;
+      updateListPanelPosition();
+    }
+  }, { passive: false });            // must be non-passive for preventDefault
 
   listPanel.addEventListener('touchend', () => {
     if (startY === null) return;
     startY = null;
-    if (currentY > 80) {
-      // Dismiss
-      listPanel.style.transition = 'transform 0.25s ease';
-      listPanel.style.transform = 'translateY(100%)';
-      setTimeout(() => closeListPanel(), 250);
-    } else {
-      // Snap back
-      listPanel.style.transition = 'transform 0.2s ease';
-      listPanel.style.transform = '';
+
+    if (_listPanelDragY > 80) {
+      // Dismiss — animate out
+      const vv = window.visualViewport;
+      const slideOut = vv ? vv.height : 600;
+      _listPanelDragY = slideOut;
+      listPanel.style.transition = 'transform 0.25s ease-in, opacity 0.25s ease-in';
+      listPanel.style.opacity = '0';
+      updateListPanelPosition();
+      setTimeout(() => {
+        _listPanelDragY = 0;
+        listPanel.style.transition = '';
+        listPanel.style.opacity = '';
+        closeListPanel();
+        updateListPanelPosition();
+      }, 250);
+    } else if (dragging) {
+      // Snap back with spring
+      _listPanelDragY = 0;
+      listPanel.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.3s ease';
+      listPanel.style.opacity = '1';
+      updateListPanelPosition();
+      setTimeout(() => { listPanel.style.transition = ''; }, 300);
     }
-    currentY = 0;
+    dragging = false;
   }, { passive: true });
 }
 
@@ -1712,11 +1855,11 @@ function populateListPanel() {
     const replyClass = depth > 0 ? ' smudge-list-item-reply' : '';
 
     html += `
-      <div class="smudge-list-item${replyClass}" data-idx="${i}" style="margin-left:${indent}px;">
+      <button class="smudge-list-item${replyClass}" data-idx="${i}" style="margin-left:${indent}px;">
         <div class="smudge-list-item-meta">${listItemMetaHtml(c)}</div>
         <div class="smudge-list-item-text">${escapeHtml(c.text)}</div>
         <span class="smudge-list-item-jump">jump to &rarr;</span>
-      </div>
+      </button>
     `;
   }
 
@@ -2247,31 +2390,12 @@ async function resolveAtprotoRecords(pointers) {
     return comment;
   }));
 
-  // Collect resolved comments, drop nulls (deleted/failed)
+  // Collect resolved comments, drop nulls (deleted/failed/unreachable)
   const resolved = [];
-  const stale = [];
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'fulfilled' && results[i].value) {
       resolved.push(results[i].value);
-    } else {
-      // Only clean up if we previously had this record cached (confirms it existed
-      // and is now gone). Skip cleanup for never-seen records — they may just be
-      // slow to propagate to the public API.
-      const ck = _pdsRecordCacheKey(pointers[i].did, pointers[i].rkey);
-      if (pdsRecordCache[ck]) {
-        delete pdsRecordCache[ck];
-        stale.push(pointers[i]);
-      }
     }
-  }
-
-  // Fire-and-forget cleanup of confirmed stale pointers
-  for (const ptr of stale) {
-    fetch(`${CONFIG.api}/api/index`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ did: ptr.did, rkey: ptr.rkey, page: CONFIG.page }),
-    }).catch(() => {});
   }
 
   return resolved;
@@ -2772,6 +2896,7 @@ async function init() {
   injectStyles();
   createDOM();
   setupZoomCompensation();
+  setupListPanelZoomCompensation();
 
   // Try to restore OAuth session (non-blocking)
   initOAuth();

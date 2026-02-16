@@ -33,7 +33,6 @@ Browser (smudge.js)              Backend (smudge-server.py)      User's PDS
 - **Browser writes directly to the user's PDS** via OAuth — credentials never touch your server
 - **The backend is a thin pointer index** — it only knows _which_ records exist on _which_ page, not what they say
 - **Anonymous comments** are stored server-side with IP rate limiting (hashed), text length limits, and token-based deletion
-- **Stale cleanup** — if a PDS record returns 404 (user deleted it), the frontend automatically removes the stale pointer from the index
 - **No external dependencies** — no firehose, just one SQLite database
 
 ## Setup
@@ -140,7 +139,7 @@ The `data-lexicon` attribute lets you use your own NSID (e.g. `com.example.smudg
 - **Toggle**: fixed button (bottom-right) shows/hides the smudge layer
 - **List**: button to the left of toggle opens a panel listing all comments
 - **Read**: hover or tap a smudge to see the comment text, author, and timestamp
-- **Write**: long-press (3 seconds) anywhere on the page to compose
+- **Write**: long-press (1 second) anywhere on the page to compose
 - **Auth choice**: sign in with ATProto (primary) or leave an anonymous mark
 - **Anonymous nudge**: choosing anonymous triggers a gentle nudge toward creating an ATProto account
 - **Reply**: reply to any comment from its tooltip
@@ -154,7 +153,7 @@ The `data-lexicon` attribute lets you use your own NSID (e.g. `com.example.smudg
 - **Server-generated timestamps** — anonymous comment `createdAt` is set server-side to prevent rate limit bypass
 - **Text length limits** — anonymous comments are capped at `SMUDGE_MAX_TEXT` characters (default 5000)
 - **Token-based deletion** — anonymous comments return a uuid4 delete token; only the token holder can delete
-- **Stale pointer cleanup** — PDS 404s trigger automatic index cleanup
+- **PDS verification on delete** — `DELETE /api/index` confirms the record is actually gone on the user's PDS before removing the pointer
 
 ## License
 
