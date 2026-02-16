@@ -799,7 +799,7 @@ function injectStyles() {
       .smudge-list-item { padding: 16px 14px; }
       .smudge-list-item-meta { font-size: 16px; gap: 8px; margin-bottom: 8px; }
       .smudge-list-item-avatar { width: 28px; height: 28px; }
-      .smudge-list-item-text { font-size: 18px; -webkit-line-clamp: 4; }
+      .smudge-list-item-text { font-size: 20px; -webkit-line-clamp: 5; line-height: 1.5; }
       .smudge-list-item-jump { font-size: 15px; margin-top: 8px; }
       .smudge-list-empty { font-size: 18px; padding: 40px; }
       .smudge-tooltip {
@@ -1119,11 +1119,41 @@ function getReplies(parentComment) {
   return comments.filter(c => getParentKey(c) === key);
 }
 
+/**
+ * Reliable tap handler: on mobile, click events inside absolutely-positioned
+ * tooltips can fail to fire (iOS touch-action interference). Uses touchend
+ * as primary handler on touch devices, with click as fallback for desktop.
+ */
+function onTap(btn, handler) {
+    let handled = false;
+    if (isMobile) {
+      let startX = 0, startY = 0;
+      btn.addEventListener('touchstart', (e) => {
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        handled = false;
+      }, { passive: true });
+      btn.addEventListener('touchend', (e) => {
+        const t = e.changedTouches[0];
+        if (Math.abs(t.clientX - startX) < 15 && Math.abs(t.clientY - startY) < 15) {
+          e.preventDefault(); // prevent synthesized click
+          e.stopPropagation();
+          handled = true;
+          handler();
+        }
+      });
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!handled) handler();
+      handled = false;
+    });
+}
+
 /** Wire up all delete buttons inside a tooltip element. Optionally remove a specific DOM element on success. */
 function wireDeleteButtons(tip, onSuccess) {
   tip.querySelectorAll('[data-action="delete-atproto"]').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
+    onTap(btn, async () => {
       const did = btn.dataset.did;
       const rkey = btn.dataset.rkey;
       const c = comments.find(x => x.did === did && x.rkey === rkey);
@@ -1142,8 +1172,7 @@ function wireDeleteButtons(tip, onSuccess) {
     });
   });
   tip.querySelectorAll('[data-action="delete-isso"]').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
+    onTap(btn, async () => {
       const issoId = parseInt(btn.dataset.issoid);
       btn.textContent = 'removing...';
       btn.disabled = true;
@@ -1214,10 +1243,9 @@ function showTooltip(comment, smudgeEl) {
 
   tip.innerHTML = html;
 
-  // Wire up all reply buttons
+  // Wire up all reply buttons (using onTap for mobile reliability)
   tip.querySelectorAll('[data-action="reply"]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
+    onTap(btn, () => {
       const key = btn.dataset.key;
       const target = comments.find(c => commentKey(c) === key) || comment;
       closeTooltip();
@@ -1452,6 +1480,15 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
   requestAnimationFrame(() => textarea.focus());
 
   popup.querySelector('[data-action="cancel"]').addEventListener('click', closeCompose);
+
+  // Cmd+Enter or Ctrl+Enter to submit
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      submitBtn.click();
+    }
+  });
+
   submitBtn.addEventListener('click', async () => {
     const text = textarea.value.trim();
     if (!text) return;
@@ -2359,10 +2396,9 @@ function showClusterTooltip(cluster, clusterEl) {
   const lastTop = tip.querySelector('.smudge-cluster-comment:last-of-type');
   if (lastTop) lastTop.style.borderBottom = 'none';
 
-  // Wire up all reply buttons
+  // Wire up all reply buttons (using onTap for mobile reliability)
   tip.querySelectorAll('[data-action="reply"]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
+    onTap(btn, () => {
       const c = allShown[parseInt(btn.dataset.cidx)];
       closeTooltip();
       openCompose(c.positionX || 0, c.positionY || 0, commentKey(c));
@@ -2517,19 +2553,14 @@ function setupZoomCompensation() {
     listBtn.style.width = listBtnSize + 'px';
     listBtn.style.height = listBtnSize + 'px';
 
-    // Position status above toggle, right-aligned with button's right edge
-    // Toggle's right edge in layout coords:
-    const toggleRightLC = vv.offsetLeft + vv.width - margin;
+    // Position status above toggle, right-aligned with toggle's right edge
     const toggleTop = vv.offsetTop + vv.height - btnSize - margin;
-    const layoutW = document.documentElement.clientWidth || window.innerWidth;
     const fs = Math.min(Math.round(13 * scale), btnSize * 0.3);
     const padV = Math.min(Math.round(8 * scale), btnSize * 0.16);
     const padH = Math.min(Math.round(12 * scale), btnSize * 0.25);
     statusEl.style.position = 'fixed';
     statusEl.style.bottom = 'auto';
     statusEl.style.left = 'auto';
-    // right = distance from layout viewport right edge to toggle's right edge
-    statusEl.style.right = (layoutW - toggleRightLC) + 'px';
     statusEl.style.fontSize = fs + 'px';
     statusEl.style.padding = `${padV}px ${padH}px`;
     statusEl.style.borderRadius = Math.round(20 * scale) + 'px';
@@ -2538,6 +2569,10 @@ function setupZoomCompensation() {
     statusEl.style.textOverflow = 'clip';
     statusEl.style.maxWidth = 'none';
     statusEl.style.top = (toggleTop - padV * 2 - fs - Math.round(6 * scale)) + 'px';
+    // Right-align with toggle: compute distance from right edge of layout viewport
+    const layoutW = document.documentElement.clientWidth;
+    const toggleRightEdge = vv.offsetLeft + vv.width - margin;
+    statusEl.style.right = (layoutW - toggleRightEdge) + 'px';
   }
 
   vv.addEventListener('resize', update);
