@@ -7,9 +7,12 @@
  *   data-page          (required) canonical page URL
  *   data-api           (optional) backend base URL, defaults to origin
  *   data-oauth-client-id (optional) URL to client-metadata.json
- *   data-isso          (optional) Isso instance URL for anonymous fallback
+ *   data-isso          (optional) Isso instance URL — auto-configures anonymous backend
  *   data-isso-uri      (optional) Isso thread URI, defaults to page path
  *   data-lexicon       (optional) ATProto collection NSID, defaults to computer.sims.smudge
+ *
+ * Custom anonymous backend:
+ *   window.smudge.setAnonBackend({ submit, remove, canRemove, getReplyParent })
  */
 
 const SCRIPT = document.currentScript || document.querySelector('script[src*="smudge"]');
@@ -33,7 +36,7 @@ let AgentClass = null;     // stored from dynamic import
 let layerVisible = false;
 let comments = [];
 const profileCache = {};
-const issoOwnedIds = new Set(); // IDs of Isso comments we created (from cookies)
+let anonBackend = null; // pluggable anonymous comment backend ({ submit, remove, canRemove, getReplyParent })
 // Detect touch-primary devices (phones/tablets) via pointer capability, not screen size
 const isMobile = window.matchMedia('(pointer: coarse)').matches;
 
@@ -111,7 +114,7 @@ function injectStyles() {
       pointer-events: auto;
       opacity: 1;
     }
-    .smudge-layer.active .smudge.isso-smudge {
+    .smudge-layer.active .smudge.anon-smudge {
       opacity: 0.7;
     }
     .smudge:hover {
@@ -134,7 +137,7 @@ function injectStyles() {
     .smudge:hover .smudge-shimmer {
       opacity: 0.85;
     }
-    .smudge.isso-smudge {
+    .smudge.anon-smudge {
       filter: saturate(0.7) brightness(0.85);
     }
 
@@ -1083,7 +1086,7 @@ function closeTooltip() {
 }
 
 function commentMetaHtml(c) {
-  if (c.source === 'isso') {
+  if (c.source !== 'atproto') {
     const identiconHtml = c.hash
       ? `<span class="smudge-tooltip-identicon">${generateIdenticon(c.hash, 22)}</span>`
       : '';
@@ -1108,8 +1111,8 @@ function commentDeleteBtnHtml(c) {
   if (c.source === 'atproto' && oauthSession && c.did === oauthSession.did && c.rkey) {
     return `<button class="smudge-btn smudge-btn-delete" data-action="delete-atproto" data-did="${escapeHtml(c.did)}" data-rkey="${escapeHtml(c.rkey)}">remove</button>`;
   }
-  if (c.source === 'isso' && issoOwnedIds.has(c.id)) {
-    return `<button class="smudge-btn smudge-btn-delete" data-action="delete-isso" data-issoid="${c.id}">remove</button>`;
+  if (anonBackend?.canRemove(c)) {
+    return `<button class="smudge-btn smudge-btn-delete" data-action="delete-anon" data-anonid="${c.id}">remove</button>`;
   }
   return '';
 }
@@ -1171,19 +1174,18 @@ function wireDeleteButtons(tip, onSuccess) {
       }
     });
   });
-  tip.querySelectorAll('[data-action="delete-isso"]').forEach(btn => {
+  tip.querySelectorAll('[data-action="delete-anon"]').forEach(btn => {
     onTap(btn, async () => {
-      const issoId = parseInt(btn.dataset.issoid);
+      const anonId = btn.dataset.anonid;
       btn.textContent = 'removing...';
       btn.disabled = true;
       try {
-        await deleteIssoComment(issoId);
-        issoOwnedIds.delete(issoId);
+        await anonBackend.remove(anonId);
         closeTooltip();
         if (onSuccess) onSuccess();
         await loadComments();
       } catch (err) {
-        console.error('[smudge] isso delete error:', err);
+        console.error('[smudge] anon delete error:', err);
         btn.textContent = 'error';
       }
     });
@@ -1387,13 +1389,13 @@ function openCompose(containerX, containerY, replyTo = null) {
 }
 
 function showAuthChoice(popup, x, y, replyTo = null) {
-  const hasIsso = !!CONFIG.isso;
+  const hasAnon = !!anonBackend;
 
   popup.innerHTML = `
     <h3>leave a mark</h3>
     <div class="smudge-auth-choice">
       <button class="smudge-auth-btn primary" data-action="signin">sign in with atmosphere</button>
-      ${hasIsso ? '<button class="smudge-auth-btn secondary" data-action="anon">leave anonymous mark</button>' : ''}
+      ${hasAnon ? '<button class="smudge-auth-btn secondary" data-action="anon">leave anonymous mark</button>' : ''}
     </div>
     <div class="smudge-compose-actions">
       <button class="smudge-btn smudge-btn-secondary" data-action="cancel">cancel</button>
@@ -1407,7 +1409,7 @@ function showAuthChoice(popup, x, y, replyTo = null) {
     closeCompose();
   });
 
-  if (hasIsso) {
+  if (hasAnon) {
     popup.querySelector('[data-action="anon"]').addEventListener('click', () => {
       showNudge(popup, x, y, replyTo);
     });
@@ -1434,7 +1436,7 @@ function showNudge(popup, x, y, replyTo = null) {
   });
 
   popup.querySelector('[data-action="stay-anon"]').addEventListener('click', () => {
-    showComposeForm(popup, x, y, 'isso', replyTo);
+    showComposeForm(popup, x, y, 'anon', replyTo);
   });
 }
 
@@ -1446,7 +1448,7 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
   const replyParent = replyTo ? getReplyParent(replyTo) : null;
   const replyCtxHtml = replyParent ? replyContextHtml(replyParent) : '';
 
-  const issoFields = mode === 'isso' ? `
+  const anonFields = mode === 'anon' ? `
     <div class="smudge-compose-identity">
       <input type="text" class="smudge-compose-name" placeholder="name (optional)" maxlength="254" autocomplete="off">
       <input type="email" class="smudge-compose-email" placeholder="email (optional, for icon)" maxlength="254" autocomplete="off">
@@ -1456,7 +1458,7 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
   popup.innerHTML = `
     <h3>${escapeHtml(label)}</h3>
     ${replyCtxHtml}
-    ${issoFields}
+    ${anonFields}
     <textarea placeholder="leave your mark..." maxlength="3000" autofocus></textarea>
     <div class="smudge-compose-actions">
       <button class="smudge-btn smudge-btn-secondary" data-action="cancel">cancel</button>
@@ -1498,16 +1500,13 @@ function showComposeForm(popup, x, y, mode, replyTo = null) {
     try {
       if (mode === 'atproto') {
         await submitAtprotoComment(text, x, y, replyTo);
-      } else {
+      } else if (anonBackend) {
         const name = nameInput?.value.trim() || '';
         const email = emailInput?.value.trim() || '';
-        // Save for next time
         if (name) localStorage.setItem('smudge-anon-name', name);
         if (email) localStorage.setItem('smudge-anon-email', email);
-        // For Isso, extract parent ID if replying to an Isso comment
-        const issoParent = replyTo?.startsWith('isso:') ? parseInt(replyTo.split(':')[1]) : null;
-        const issoResult = await submitIssoComment(text, x, y, name, email, issoParent);
-        if (issoResult?.id) issoOwnedIds.add(issoResult.id);
+        const parentId = anonBackend.getReplyParent?.(replyTo) ?? null;
+        await anonBackend.submit(text, x, y, { name, email, parent: parentId });
       }
       closeCompose();
       await loadComments(); // refresh
@@ -1615,7 +1614,7 @@ function setupListPanelPullDismiss() {
 }
 
 function listItemMetaHtml(c) {
-  if (c.source === 'isso') {
+  if (c.source !== 'atproto') {
     const identiconHtml = c.hash
       ? `<span class="smudge-list-item-identicon">${generateIdenticon(c.hash, 22)}</span>`
       : '';
@@ -1727,13 +1726,13 @@ function populateListPanel() {
 
 function commentKey(c) {
   if (c.did && c.rkey) return `atproto:${c.did}:${c.rkey}`;
-  if (c.source === 'isso' && c.id != null) return `isso:${c.id}`;
+  if (c.source && c.source !== 'atproto' && c.id != null) return `anon:${c.id}`;
   return `pos:${c.positionX}:${c.positionY}:${c.text}`;
 }
 
 function getParentKey(c) {
   if (c.replyTo) return c.replyTo;
-  if (c.source === 'isso' && c.parent) return `isso:${c.parent}`;
+  if (c.source !== 'atproto' && c.parent) return `anon:${c.parent}`;
   return null;
 }
 
@@ -1744,7 +1743,7 @@ function getReplyParent(replyToKey) {
 function replyContextHtml(parent) {
   if (!parent) return '';
   let authorHtml;
-  if (parent.source === 'isso') {
+  if (parent.source !== 'atproto') {
     const identiconHtml = parent.hash
       ? `<span class="smudge-tooltip-identicon" style="display:inline-flex;vertical-align:middle;margin-right:4px;">${generateIdenticon(parent.hash, 16)}</span>`
       : '';
@@ -1913,42 +1912,75 @@ async function deleteSmudge(comment) {
   comments = comments.filter(c => !(c.did === comment.did && c.rkey === comment.rkey));
 }
 
-// ── Isso comment submission ────────────────────────────────────────────
-async function submitIssoComment(text, posX, posY, author = '', email = '', parent = null) {
-  const issoUri = CONFIG.issoUri || `/${CONFIG.page}`;
+// ── anonymous backend ──────────────────────────────────────────────────
 
-  const issoRes = await fetch(`${CONFIG.isso}/new?uri=${encodeURIComponent(issoUri)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      text,
-      author,
-      email,
-      website: `https://smudge.pos/${Math.round(posX)}/${Math.round(posY)}`,
-      parent,
-    }),
-  });
-  if (!issoRes.ok) {
-    const body = await issoRes.text();
-    console.error('[smudge] isso error:', issoRes.status, body);
-    throw new Error(`Isso ${issoRes.status}: ${body}`);
-  }
-  const data = await issoRes.json();
-  return data; // includes id, hash, author, etc.
+/**
+ * Built-in Isso backend. Auto-configured when data-isso is set.
+ * Replace with window.smudge.setAnonBackend() for a custom backend.
+ *
+ * Interface:
+ *   submit(text, x, y, { name, email, parent }) → Promise<any>
+ *   remove(id)                                   → Promise<void>
+ *   canRemove(comment)                           → boolean
+ *   getReplyParent(replyToKey)                   → parentId | null
+ */
+function createIssoBackend(issoUrl, issoUri) {
+  const ownedIds = new Set();
+  return {
+    async submit(text, x, y, opts = {}) {
+      const res = await fetch(`${issoUrl}/new?uri=${encodeURIComponent(issoUri)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          text,
+          author: opts.name || '',
+          email: opts.email || '',
+          website: `https://smudge.pos/${Math.round(x)}/${Math.round(y)}`,
+          parent: opts.parent ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Isso ${res.status}: ${body}`);
+      }
+      const data = await res.json();
+      if (data?.id) ownedIds.add(String(data.id));
+      return data;
+    },
+    async remove(id) {
+      const res = await fetch(`${issoUrl}/id/${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Isso delete ${res.status}: ${body}`);
+      }
+      ownedIds.delete(String(id));
+    },
+    canRemove(c) {
+      return c.source !== 'atproto' && c.id != null && ownedIds.has(String(c.id));
+    },
+    getReplyParent(replyToKey) {
+      if (replyToKey?.startsWith('anon:')) return parseInt(replyToKey.split(':')[1]);
+      return null;
+    },
+  };
 }
 
-async function deleteIssoComment(commentId) {
-  const issoRes = await fetch(`${CONFIG.isso}/id/${commentId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  });
-  if (!issoRes.ok) {
-    const body = await issoRes.text();
-    console.error('[smudge] isso delete error:', issoRes.status, body);
-    throw new Error(`Isso delete ${issoRes.status}: ${body}`);
-  }
+// Auto-configure Isso backend if data-isso is set
+if (CONFIG.isso) {
+  anonBackend = createIssoBackend(CONFIG.isso, CONFIG.issoUri || `/${CONFIG.page}`);
 }
+
+// Public API
+window.smudge = {
+  /** Replace the anonymous comment backend. */
+  setAnonBackend(backend) { anonBackend = backend; },
+  /** Get the current anonymous backend (or null). */
+  get anonBackend() { return anonBackend; },
+};
 
 // ── OAuth sign-in ──────────────────────────────────────────────────────
 async function initOAuth() {
@@ -2235,13 +2267,13 @@ function createSingleSmudge(comment) {
   const seed = hashStr(comment.text + (comment.did || '') + comment.createdAt);
   const rand = seededRandom(seed);
 
-  const sizeBase = comment.source === 'isso' ? 0.7 : 1;
+  const sizeBase = comment.source !== 'atproto' ? 0.7 : 1;
   const w = Math.round((50 + rand() * 30) * sizeBase);
   const h = Math.round((30 + rand() * 20) * sizeBase);
   const rotation = Math.round(rand() * 60 - 30);
 
   const smudge = document.createElement('div');
-  smudge.className = 'smudge' + (comment.source === 'isso' ? ' isso-smudge' : '');
+  smudge.className = 'smudge' + (comment.source !== 'atproto' ? ' anon-smudge' : '');
   smudge.style.left = ((comment.positionX || 0) - w / 2) + 'px';
   smudge.style.top = ((comment.positionY || 0) - h / 2) + 'px';
   smudge.style.width = w + 'px';
@@ -2488,11 +2520,11 @@ function hashStr(s) {
   return Math.abs(h);
 }
 
-// ── identicon generation (for Isso comments with hash) ─────────────────
+// ── identicon generation (for anonymous comments with hash) ─────────────
 const IDENTICON_COLORS = ['#9abf88','#5698c4','#e279a3','#9163b6','#be5168','#f19670','#e4bf80','#447c69'];
 
 function generateIdenticon(hash, size = 28) {
-  // Isso-style 5x5 symmetric identicon from hash string
+  // 5x5 symmetric identicon from hash string
   const hex = (hash || '').slice(-16);
   let num = 0;
   for (let i = 0; i < hex.length; i++) {
